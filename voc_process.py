@@ -184,7 +184,7 @@ def process():
     graph, bottleneck_tensor, jpeg_data_tensor, resized_image_tensor = (
       create_inception_graph())
 
-    loader = VOCLoader('/home/jamiecho/Downloads/VOCdevkit/VOC2012/')
+    loader = VOCLoader('/home/yoonyoungcho/Downloads/VOCdevkit/VOC2012/')
 
     categories = ['background'] + loader.list_image_sets()
     num_classes = len(categories)
@@ -235,7 +235,7 @@ def process():
             #    return
 
 def visualize():
-  loader = VOCLoader('/home/jamiecho/Downloads/VOCdevkit/VOC2012/')
+  loader = VOCLoader('/home/yoonyoungcho/Downloads/VOCdevkit/VOC2012/')
   categories = ['background'] + loader.list_image_sets()
   num_classes = len(categories)
 
@@ -264,5 +264,5 @@ def visualize():
         return
 
 if __name__ == "__main__":
-    process()
-    #visualize()
+    #process()
+    visualize()

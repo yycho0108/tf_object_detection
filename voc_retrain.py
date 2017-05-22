@@ -468,8 +468,9 @@ def add_final_training_ops(class_count, final_tensor_name, bottleneck_tensor):
       outputs = tf.tensordot(bottleneck_input, layer_weights, axes=[[3],[0]]) + layer_biases
 
       tf.summary.histogram('pre_activations', outputs)
-  g_clf, g_bnd = tf.split(ground_truth_input, [21,4], 3) # ground truth
-  n_clf, n_bnd = tf.split(outputs, [21,4], 3) # network output
+
+    g_clf, g_bnd = tf.split(ground_truth_input, [21,4], 3, name='g_split') # ground truth
+    n_clf, n_bnd = tf.split(outputs, [21,4], 3, name='n_split') # network output
 
   final_tensor = tf.nn.softmax(n_clf, name=final_tensor_name)
   tf.summary.histogram('activations', n_clf)
@@ -481,10 +482,17 @@ def add_final_training_ops(class_count, final_tensor_name, bottleneck_tensor):
       cross_entropy_mean = tf.reduce_mean(cross_entropy)
 
   with tf.name_scope('bbox'):
-    bbox_loss = tf.nn.l2_loss((g_bnd - n_bnd)/256.)
+    # g_clf = [None, 8, 8, 21]
+    idx = tf.where(g_clf[:,:,:,0] < 1.0) # [None, 8, 8]
+    # no loss unless it isn't background!
+    g = tf.gather_nd(g_bnd, idx)
+    n = tf.gather_nd(n_bnd, idx)
+    diff = (g-n)/64.
+    bbox_loss = tf.reduce_mean(tf.abs(diff))
     bbox_mean = tf.reduce_mean(bbox_loss)
 
   tf.summary.scalar('cross_entropy', cross_entropy_mean)
+  tf.summary.scalar('bbox loss', bbox_mean)
   loss = cross_entropy_mean + bbox_mean 
   tf.summary.scalar('net loss', loss)
 
@@ -572,7 +580,7 @@ def main(_):
     print('START TRAINING !!')
 
     # Run the training for as many cycles as requested on the command line.
-    for i in range(FLAGS.how_many_training_steps):
+    def train(i):
       # Get a batch of input bottleneck values, either calculated fresh every
       # time with distortions applied, or from the cache stored on disk.
       if do_distort_images:
@@ -621,6 +629,20 @@ def main(_):
               (datetime.now(), i, validation_accuracy * 100,
                len(validation_bottlenecks)))
 
+    n = FLAGS.how_many_training_steps
+    now = 0
+
+    while True:
+        for i in range(now, now + n):
+            train(i)
+        now += n
+        s = raw_input('Enter Number of Episodes to Continue : \n')
+        n = 0
+        try:
+            n = int(s)
+        except Exception as e:
+            break
+      
     # We've completed all our training, so run a final test evaluation on
     # some new images we haven't used before.
     test_bottlenecks, test_ground_truth, test_filenames = (
