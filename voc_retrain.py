@@ -179,11 +179,11 @@ def create_inception_graph():
   return graph, bottleneck_tensor, jpeg_data_tensor, resized_input_tensor
 
 def get_bottleneck(sess, name, jpeg_data_tensor, bottleneck_tensor):
-  box_ext='_box.npy'
-  lab_ext='_lab.npy'
+  btl_ext='_btl.npy'
+  lbl_ext='_lbl.npy'
 
-  bv_path = os.path.join(FLAGS.bottleneck_dir, name + box_ext)
-  bl_path = os.path.join(FLAGS.bottleneck_dir, name + lab_ext)
+  bv_path = os.path.join(FLAGS.bottleneck_dir, name + btl_ext)
+  bl_path = os.path.join(FLAGS.bottleneck_dir, name + lbl_ext)
 
   val = np.load(bv_path, allow_pickle=True)
   lab = np.load(bl_path, allow_pickle=True)
@@ -221,8 +221,9 @@ def get_random_cached_bottlenecks(sess, image_lists, how_many, category,
     # Retrieve a random sample of bottlenecks.
     for _ in range(how_many):
       l = image_lists[category]
+      image_index = random.randrange(MAX_NUM_IMAGES_PER_CLASS + 1)
       image_name = l[image_index % len(l)]
-      bottleneck, ground_truth = get_or_create_bottleneck(sess, image_name, jpeg_data_tensor, bottleneck_tensor)
+      bottleneck, ground_truth = get_bottleneck(sess, image_name, jpeg_data_tensor, bottleneck_tensor)
       bottlenecks.append(bottleneck)
       ground_truths.append(ground_truth)
       filenames.append(image_name)
@@ -233,7 +234,7 @@ def get_random_cached_bottlenecks(sess, image_lists, how_many, category,
 
       l = image_lists[category]
       image_name = l[image_index % len(l)]
-      bottleneck, ground_truth = get_or_create_bottleneck(sess, image_name, jpeg_data_tensor, bottleneck_tensor)
+      bottleneck, ground_truth = get_bottleneck(sess, image_name, jpeg_data_tensor, bottleneck_tensor)
       bottlenecks.append(bottleneck)
       ground_truths.append(ground_truth)
       filenames.append(image_name)
@@ -520,13 +521,11 @@ def main(_):
   tf.gfile.MakeDirs(FLAGS.summaries_dir)
 
   # Set up the pre-trained graph.
-  maybe_download_and_extract()
   graph, bottleneck_tensor, jpeg_data_tensor, resized_image_tensor = (
       create_inception_graph())
 
   # Look at the folder structure, and create lists of all the images.
-  image_lists = create_image_lists(FLAGS.bottleneck_dir, FLAGS.testing_percentage,
-                                   FLAGS.validation_percentage)
+  image_lists = create_image_lists(FLAGS.testing_percentage, FLAGS.validation_percentage)
 
   # See if the command-line flags mean we're applying any distortions.
   do_distort_images = should_distort_images(

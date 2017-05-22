@@ -13,8 +13,8 @@ import numpy as np
 import cv2
 
 ## VIZ PARAMS
-BLACK = np.asarray([0,0,0], dtype=np.uint8)
-colors = [BLACK]
+WHITE = np.asarray([255,255,255], dtype=np.uint8)
+colors = [WHITE]
 for i in range(20):
     color = cv2.cvtColor(np.asarray([[[i, 255, 255]]],dtype=np.uint8), cv2.COLOR_HSV2BGR)[0,0]
     colors.append(color)
@@ -158,5 +158,26 @@ def process():
             #if cv2.waitKey(0) == 27:
             #    return
 
+def visualize():
+  loader = VOCLoader('/home/jamiecho/Downloads/VOCdevkit/VOC2012/')
+  categories = loader.list_image_sets()
+  num_classes = len(categories)+1
+  for ann in loader.annotations():
+    img = loader.img_from_annotation(ann)
+    label = create_label(ann, categories)
+
+    frame = cv2.imread(img)
+    label_frame = np.zeros((8,8,3), dtype=np.uint8)
+    for idx in range(num_classes):
+        label_frame[label[:,:,idx] == 1] = colors[idx]
+    h,w = frame.shape[:-1]
+    label_frame = cv2.resize(label_frame, (w,h), cv2.INTER_LINEAR)
+    cv2.imshow('label', label_frame)
+    cv2.imshow('frame', frame)
+    overlay = cv2.addWeighted(label_frame, 0.5, frame, 0.5, 0.0)
+    cv2.imshow('overlay', overlay)
+    if cv2.waitKey(0) == 27:
+        return
+
 if __name__ == "__main__":
-    process()
+    visualize()

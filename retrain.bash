@@ -1,7 +1,7 @@
 #!/bin/bash
 mkdir -p workspace
 
-python retrain.py \
+python voc_retrain.py \
 	--bottleneck_dir=workspace/bottlenecks \
 	--model_dir=workspace/inception \
 	--output_graph=workspace/graph.pb \
