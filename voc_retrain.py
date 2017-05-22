@@ -435,7 +435,6 @@ def add_final_training_ops(class_count, final_tensor_name, bottleneck_tensor):
 
   with tf.name_scope('input'):
     shape = [None] + bottleneck_tensor.shape.dims
-    print('s', shape)
     bottleneck_input = tf.placeholder_with_default(
         bottleneck_tensor, shape=[None,8,8,2048],
         name='BottleneckInputPlaceholder')
@@ -469,20 +468,20 @@ def add_final_training_ops(class_count, final_tensor_name, bottleneck_tensor):
       outputs = tf.tensordot(bottleneck_input, layer_weights, axes=[[3],[0]]) + layer_biases
 
       tf.summary.histogram('pre_activations', outputs)
-  g_clf, g_bnd = tf.split(ground_truth_input, [21,4], 2) # ground truth
-  n_clf, n_bnd = tf.split(outputs, [21,4], 2) # network output
+  g_clf, g_bnd = tf.split(ground_truth_input, [21,4], 3) # ground truth
+  n_clf, n_bnd = tf.split(outputs, [21,4], 3) # network output
 
-  final_tensor = tf.nn.sigmoid(n_clf, name=final_tensor_name)
+  final_tensor = tf.nn.softmax(n_clf, name=final_tensor_name)
   tf.summary.histogram('activations', n_clf)
 
   with tf.name_scope('cross_entropy'):
-    cross_entropy = tf.nn.sigmoid_cross_entropy_with_logits(
+    cross_entropy = tf.nn.softmax_cross_entropy_with_logits(
         labels=g_clf, logits=n_clf)
     with tf.name_scope('total'):
       cross_entropy_mean = tf.reduce_mean(cross_entropy)
 
   with tf.name_scope('bbox'):
-    bbox_loss = tf.nn.l2_loss(g_bnd - n_bnd)
+    bbox_loss = tf.nn.l2_loss((g_bnd - n_bnd)/256.)
     bbox_mean = tf.reduce_mean(bbox_loss)
 
   tf.summary.scalar('cross_entropy', cross_entropy_mean)
@@ -496,7 +495,7 @@ def add_final_training_ops(class_count, final_tensor_name, bottleneck_tensor):
   return (train_step, cross_entropy_mean, bottleneck_input, ground_truth_input,
           final_tensor)
 
-def add_evaluation_step(result_tensor, ground_truth_tensor):
+def add_evaluation_step(final_tensor, ground_truth_tensor):
   """Inserts the operations we need to evaluate the accuracy of our results.
 
   Args:
@@ -510,11 +509,11 @@ def add_evaluation_step(result_tensor, ground_truth_tensor):
   with tf.name_scope('accuracy'):
     with tf.name_scope('correct_prediction'):
       # currently editing evaluation step
-      #g_clf, g_bnd = tf.split(ground_truth_input, [21,4], 2) # ground truth
-      #n_clf, n_bnd = tf.split(outputs, [21,4], 2) # network output
+      g_clf, g_bnd = tf.split(ground_truth_tensor, [21,4], 3) # ground truth
+      n_clf = final_tensor #tf.split(result_tensor, [21,4], 3) # network output
 
-      prediction = tf.greater(result_tensor, 0.5)
-      ground_truth_prediction = tf.greater(ground_truth_tensor, 0.5)
+      prediction = tf.greater(n_clf, 0.5)
+      ground_truth_prediction = tf.greater(g_clf, 0.5)
       correct_prediction = tf.cast(tf.equal(prediction, ground_truth_prediction), tf.float32)
       evaluation_step = tf.reduce_mean(correct_prediction)
   tf.summary.scalar('accuracy', evaluation_step)

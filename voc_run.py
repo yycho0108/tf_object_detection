@@ -24,6 +24,18 @@ def rand_gen(high):
   while True:
     yield np.random.randint(high)
 
+def report_graph(graph):
+  for op in graph.get_operations():
+     print('===')
+     print(op.name)
+     print('Input:')
+     for i in op.inputs:
+         print('\t %s' % i.name, i.get_shape())
+     print('Output:')
+     for o in op.outputs:
+         print('\t %s' % o.name, o.get_shape())
+     print('===')
+
 def run_inference_on_image():
     categories =[
             'background', 'aeroplane', 'bicycle', 'bird', 'boat',
@@ -41,6 +53,8 @@ def run_inference_on_image():
 
     with tf.Session() as sess:
         final_tensor = sess.graph.get_tensor_by_name('final_result:0')
+        bnd_tensor = sess.graph.get_tensor_by_name('split_1:1')
+        #report_graph(sess.graph)
         cnt = 0
         fs = os.listdir(imagePath)
         for f_idx in rand_gen(len(fs)):
@@ -48,11 +62,15 @@ def run_inference_on_image():
           f = os.path.join(imagePath, fdir)
           if os.path.isfile(f):
             image_data = tf.gfile.FastGFile(f, 'rb').read()
-            predictions = sess.run(final_tensor,
+
+            predictions, bboxes = sess.run([final_tensor,bnd_tensor],
                                    {'DecodeJpeg/contents:0': image_data})
 
-            predictions = np.squeeze(predictions)
+            #predictions = np.squeeze(predictions)
+            predictions = predictions.reshape((8, 8, -1))
             predictions[predictions < 0.2] = 0.0
+            print bboxes.shape
+            print predictions.shape
 
             frame = cv2.imread(f)
             h,w,_ = frame.shape
@@ -67,7 +85,7 @@ def run_inference_on_image():
             for idx in range(21):
               indices = np.nonzero(label == idx)
               if len(indices[0]) > 0:
-                print categories[idx]
+                print categories[idx+1]
               label_frame[label == idx] = colors[idx]
 
             overlay = cv2.addWeighted(label_frame, 0.5, frame, 0.5, 0.0)
