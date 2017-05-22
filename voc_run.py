@@ -21,6 +21,13 @@ def create_graph():
         _ = tf.import_graph_def(graph_def, name='')
 
 def run_inference_on_image():
+    categories =[
+            'background', 'aeroplane', 'bicycle', 'bird', 'boat',
+            'bottle', 'bus', 'car', 'cat', 'chair',
+            'cow', 'diningtable', 'dog', 'horse',
+            'motorbike', 'person', 'pottedplant',
+            'sheep', 'sofa', 'train',
+            'tvmonitor'] 
     if not tf.gfile.Exists(imagePath):
         tf.logging.fatal('File does not exist %s', imagePath)
         return
@@ -37,18 +44,24 @@ def run_inference_on_image():
               image_data = tf.gfile.FastGFile(f, 'rb').read()
               predictions = sess.run(final_tensor,
                                      {'DecodeJpeg/contents:0': image_data})
-              # squeeze?
-              print 'ps', predictions.shape
+
+              predictions = np.squeeze(predictions)
 
               frame = cv2.imread(f)
               h,w,_ = frame.shape
 
               # label = (x,8,8,21)
-              label = np.argmax(label, axis=2)
+              print predictions[0,0,:]
+              label = np.argmax(predictions, axis=2)
+              print label
+              label = cv2.resize(label, (w,h), interpolation=cv2.INTER_NEAREST)
 
-              label_frame = np.zeros((w,h,3), dtype=np.uint8)
+              label_frame = np.zeros((h,w,3), dtype=np.uint8)
               for idx in range(21):
-                label_frame[label == idx] = color[idx]
+                indices = np.nonzero(label == idx)
+                if len(indices[0]) > 0:
+                  print categories[idx]
+                label_frame[label == idx] = colors[idx]
 
               overlay = cv2.addWeighted(label_frame, 0.5, frame, 0.5, 0.0)
 

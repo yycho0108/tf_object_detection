@@ -107,8 +107,9 @@ def create_label(ann, categories):
               box1 = (j * w_box, i * h_box, (j+1) * w_box, (i+1) * h_box)
               box2 = (xmin, ymin, xmax, ymax)
               o = overlap(box1, box2) / (w_box * h_box)
-              label[i,j,idx] = o
-              label[i,j,0] = 0
+              if o > 0:
+                label[i,j,idx] += o
+                label[i,j,0] = 0
 
         #xmin = int(np.floor(xmin / w_box))
         #ymin = int(np.floor(ymin / h_box))
@@ -178,17 +179,25 @@ def process():
 def visualize():
   loader = VOCLoader('/home/jamiecho/Downloads/VOCdevkit/VOC2012/')
   categories = loader.list_image_sets()
-  num_classes = len(categories)+1
+  categories_bk = ['background'] + loader.list_image_sets()
+  num_classes = len(categories)
+
   for ann in loader.annotations():
     img = loader.img_from_annotation(ann)
+    print img
+
     label = create_label(ann, categories)
+    label_frame = np.zeros((8,8,3), dtype=np.uint8)
 
     frame = cv2.imread(img)
-    label_frame = np.zeros((8,8,3), dtype=np.uint8)
-    for idx in range(num_classes):
-      indices = (label[:,:,idx] != 0)
-      label_frame[indices,:] = label[indices,idx] * colors[idx]
     h,w = frame.shape[:-1]
+
+    for idx in range(1 + num_classes):
+      indices = (label[:,:,idx] != 0)
+      label_frame[indices,:] = colors[idx]
+      if (len(np.nonzero(indices)[0]) > 0):
+        print categories_bk[idx]
+
     label_frame = cv2.resize(label_frame, (w,h), cv2.INTER_LINEAR)
     cv2.imshow('label', label_frame)
     cv2.imshow('frame', frame)
