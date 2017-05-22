@@ -121,6 +121,63 @@ def create_label(ann, categories):
 
     return label
 
+def create_ssd_label(ann, categories):
+    width = int(ann.findChild('width').contents[0])
+    height = int(ann.findChild('height').contents[0])
+
+    num_classes = len(categories)
+
+    w_box = width / 8.0
+    h_box = height / 8.0
+
+    objs = ann.findAll('object')
+
+    label = np.zeros((8,8,num_classes + 4), dtype=np.float32)
+
+    label[:, :, 0] = 1.0 # == background
+
+    overlaps = np.zeros((8,8), dtype=np.float32)
+
+    for obj in objs:
+        category = obj.findChild('name').contents[0]
+
+        idx = categories.index(category)
+        box = obj.findChild('bndbox')
+
+        xmin = int(box.findChild('xmin').contents[0])
+        ymin = int(box.findChild('ymin').contents[0])
+        xmax = int(box.findChild('xmax').contents[0])
+        ymax = int(box.findChild('ymax').contents[0])
+        cx = (xmin + xmax) / 2
+        cy = (ymin + ymax) / 2
+
+        for i in range(8):
+            for j in range(8):
+              box1 = (j * w_box, i * h_box, (j+1) * w_box, (i+1) * h_box)
+              box2 = (xmin, ymin, xmax, ymax)
+
+              dx = (cx - ((2*j+1)*w_box / 2)) / w_box
+              dy = (cy - ((2*i+1)*h_box / 2)) / h_box
+              dw = (xmax - xmin) / w_box
+              dh = (ymax - ymin) / h_box
+
+              o = overlap(box1, box2) / (w_box * h_box)
+              if o > overlaps[i,j]:
+                overlaps[i,j] = o
+                label[i,j,idx] += o
+                label[i,j,-4:] = [dx,dy,dw,dh]
+              label[i,j,0] -= o
+
+        #xmin = int(np.floor(xmin / w_box))
+        #ymin = int(np.floor(ymin / h_box))
+        #xmax = int(np.ceil(xmax / w_box))
+        #ymax = int(np.ceil(ymax / h_box))
+
+        #label[ymin:ymax, xmin:xmax, idx] = 1.0
+        #label[ymin:ymax, xmin:xmax, 0] = 0.0
+
+    return label
+
 def process():
     btl_dir = './workspace/bottlenecks'
 
@@ -129,8 +186,8 @@ def process():
 
     loader = VOCLoader('/home/jamiecho/Downloads/VOCdevkit/VOC2012/')
 
-    categories = loader.list_image_sets()
-    num_classes = len(categories)+1
+    categories = ['background'] + loader.list_image_sets()
+    num_classes = len(categories)
 
     with tf.Session(graph = graph) as sess:
         cnt = 0
@@ -150,7 +207,8 @@ def process():
                 continue
 
             # run label
-            label = create_label(ann, categories)
+            #label = create_label(ann, categories)
+            label = create_ssd_label(ann, categories)
             np.save(bl_path, label, allow_pickle=True)
 
             if os.path.exists(bv_path):
@@ -206,5 +264,5 @@ def visualize():
         return
 
 if __name__ == "__main__":
-    #process()
-    visualize()
+    process()
+    #visualize()

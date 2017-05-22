@@ -442,7 +442,7 @@ def add_final_training_ops(class_count, final_tensor_name, bottleneck_tensor):
 
     # for classification
     ground_truth_input = tf.placeholder(tf.float32,
-        [None, 8, 8, 21],
+        [None, 8, 8, 21 + 4],
         name='GroundTruthInput')
 
     # for bounding boxes!
@@ -456,35 +456,42 @@ def add_final_training_ops(class_count, final_tensor_name, bottleneck_tensor):
   with tf.name_scope(layer_name):
     with tf.name_scope('weights'):
       # (batchx8x8x2048) --> (batchx8x8x21), 21 for VGG classes + background(0)
-      initial_value = tf.truncated_normal([BOTTLENECK_TENSOR_SIZE, 21],
+      initial_value = tf.truncated_normal([BOTTLENECK_TENSOR_SIZE, 21 + 4],
                                           stddev=0.001)
 
       layer_weights = tf.Variable(initial_value, name='final_weights')
 
       variable_summaries(layer_weights)
     with tf.name_scope('biases'):
-      layer_biases = tf.Variable(tf.zeros([8, 8, 21]), name='final_biases')
+      layer_biases = tf.Variable(tf.zeros([8, 8, 21 + 4]), name='final_biases')
       variable_summaries(layer_biases)
     with tf.name_scope('Wx_plus_b'):
-      #logits = tf.matmul(bottleneck_input, layer_weights) + layer_biases
-      logits = tf.tensordot(bottleneck_input, layer_weights, axes=[[3],[0]]) + layer_biases
-      # --> logits for presence
+      outputs = tf.tensordot(bottleneck_input, layer_weights, axes=[[3],[0]]) + layer_biases
 
-      tf.summary.histogram('pre_activations', logits)
+      tf.summary.histogram('pre_activations', outputs)
+  g_clf, g_bnd = tf.split(ground_truth_input, [21,4], 2) # ground truth
+  n_clf, n_bnd = tf.split(outputs, [21,4], 2) # network output
 
-  final_tensor = tf.nn.sigmoid(logits, name=final_tensor_name)
-  tf.summary.histogram('activations', final_tensor)
+  final_tensor = tf.nn.sigmoid(n_clf, name=final_tensor_name)
+  tf.summary.histogram('activations', n_clf)
 
   with tf.name_scope('cross_entropy'):
     cross_entropy = tf.nn.sigmoid_cross_entropy_with_logits(
-        labels=ground_truth_input, logits=logits)
+        labels=g_clf, logits=n_clf)
     with tf.name_scope('total'):
       cross_entropy_mean = tf.reduce_mean(cross_entropy)
+
+  with tf.name_scope('bbox'):
+    bbox_loss = tf.nn.l2_loss(g_bnd - n_bnd)
+    bbox_mean = tf.reduce_mean(bbox_loss)
+
   tf.summary.scalar('cross_entropy', cross_entropy_mean)
+  loss = cross_entropy_mean + bbox_mean 
+  tf.summary.scalar('net loss', loss)
 
   with tf.name_scope('train'):
     optimizer = tf.train.GradientDescentOptimizer(FLAGS.learning_rate)
-    train_step = optimizer.minimize(cross_entropy_mean)
+    train_step = optimizer.minimize(loss)
 
   return (train_step, cross_entropy_mean, bottleneck_input, ground_truth_input,
           final_tensor)
@@ -502,6 +509,10 @@ def add_evaluation_step(result_tensor, ground_truth_tensor):
   """
   with tf.name_scope('accuracy'):
     with tf.name_scope('correct_prediction'):
+      # currently editing evaluation step
+      #g_clf, g_bnd = tf.split(ground_truth_input, [21,4], 2) # ground truth
+      #n_clf, n_bnd = tf.split(outputs, [21,4], 2) # network output
+
       prediction = tf.greater(result_tensor, 0.5)
       ground_truth_prediction = tf.greater(ground_truth_tensor, 0.5)
       correct_prediction = tf.cast(tf.equal(prediction, ground_truth_prediction), tf.float32)
