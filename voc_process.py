@@ -94,7 +94,7 @@ def create_label(ann, categories):
         category = obj.findChild('name').contents[0]
 
         # 0 = background
-        idx = categories.index(category) + 1
+        idx = categories.index(category)
         box = obj.findChild('bndbox')
 
         xmin = int(box.findChild('xmin').contents[0])
@@ -178,8 +178,7 @@ def process():
 
 def visualize():
   loader = VOCLoader('/home/jamiecho/Downloads/VOCdevkit/VOC2012/')
-  categories = loader.list_image_sets()
-  categories_bk = ['background'] + loader.list_image_sets()
+  categories = ['background'] + loader.list_image_sets()
   num_classes = len(categories)
 
   for ann in loader.annotations():
@@ -192,11 +191,11 @@ def visualize():
     frame = cv2.imread(img)
     h,w = frame.shape[:-1]
 
-    for idx in range(1 + num_classes):
+    for idx in range(num_classes):
       indices = (label[:,:,idx] != 0)
       label_frame[indices,:] = colors[idx]
       if (len(np.nonzero(indices)[0]) > 0):
-        print categories_bk[idx]
+        print categories[idx]
 
     label_frame = cv2.resize(label_frame, (w,h), cv2.INTER_LINEAR)
     cv2.imshow('label', label_frame)
@@ -207,5 +206,5 @@ def visualize():
         return
 
 if __name__ == "__main__":
-    process()
-    #visualize()
+    #process()
+    visualize()
