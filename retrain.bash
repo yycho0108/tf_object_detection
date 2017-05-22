@@ -8,4 +8,5 @@ python voc_retrain.py \
 	--output_labels=workspace/labels.txt \
 	--image_dir=data/ \
 	--learning_rate=0.01 \
-	--how_many_training_steps=4000
+	--how_many_training_steps=4000 \
+	--test_batch_size=100

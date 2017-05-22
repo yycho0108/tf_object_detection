@@ -68,6 +68,11 @@ def run_bottleneck_on_image(sess, image_data, image_data_tensor,
   bottleneck_values = np.squeeze(bottleneck_values)
   return bottleneck_values
 
+def overlap(r_a, r_b):
+    xa1,ya1,xa2,ya2 = r_a
+    xb1,yb1,xb2,yb2 = r_b
+    return max(0, min(xa2,xb2) - max(xa1,xb1)) * max(0, min(ya2,yb2) - max(ya1,yb1))
+
 def create_label(ann, categories):
     width = int(ann.findChild('width').contents[0])
     height = int(ann.findChild('height').contents[0])
@@ -80,6 +85,8 @@ def create_label(ann, categories):
     objs = ann.findAll('object')
 
     label = np.zeros((8,8,num_classes), dtype=np.float32)
+
+    #bbox_label = np.zeros((8,8,num_classes,4), dtype=np.float32)
 
     label[:, :, 0] = 1.0 # == background
 
@@ -95,13 +102,21 @@ def create_label(ann, categories):
         xmax = int(box.findChild('xmax').contents[0])
         ymax = int(box.findChild('ymax').contents[0])
 
-        xmin = int(np.floor(xmin / w_box))
-        ymin = int(np.floor(ymin / h_box))
-        xmax = int(np.ceil(xmax / w_box))
-        ymax = int(np.ceil(ymax / h_box))
+        for i in range(8):
+            for j in range(8):
+              box1 = (j * w_box, i * h_box, (j+1) * w_box, (i+1) * h_box)
+              box2 = (xmin, ymin, xmax, ymax)
+              o = overlap(box1, box2) / (w_box * h_box)
+              label[i,j,idx] = o
+              label[i,j,0] = 0
 
-        label[ymin:ymax, xmin:xmax, idx] = 1.0
-        label[ymin:ymax, xmin:xmax, 0] = 0.0
+        #xmin = int(np.floor(xmin / w_box))
+        #ymin = int(np.floor(ymin / h_box))
+        #xmax = int(np.ceil(xmax / w_box))
+        #ymax = int(np.ceil(ymax / h_box))
+
+        #label[ymin:ymax, xmin:xmax, idx] = 1.0
+        #label[ymin:ymax, xmin:xmax, 0] = 0.0
 
     return label
 
@@ -130,19 +145,21 @@ def process():
             bv_path = os.path.join(btl_dir, common + '_btl.npy')
             bl_path = os.path.join(btl_dir, common + '_lbl.npy')
 
-            if os.path.exists(bv_path) and os.path.exists(bl_path):
+            if os.path.exists(bl_path):
+                continue
+
+            # run label
+            label = create_label(ann, categories)
+            np.save(bl_path, label, allow_pickle=True)
+
+            if os.path.exists(bv_path):
                 continue
 
             # run bottleneck
             image_data = gfile.FastGFile(img, 'rb').read()
             bottleneck_values = run_bottleneck_on_image(sess, image_data, jpeg_data_tensor, bottleneck_tensor)
-
-            # run label
-            label = create_label(ann, categories)
-            
             # save
             np.save(bv_path, bottleneck_values, allow_pickle=True)
-            np.save(bl_path, label, allow_pickle=True)
 
             #VIZ
             #frame = cv2.imread(img)
@@ -169,7 +186,8 @@ def visualize():
     frame = cv2.imread(img)
     label_frame = np.zeros((8,8,3), dtype=np.uint8)
     for idx in range(num_classes):
-        label_frame[label[:,:,idx] == 1] = colors[idx]
+      indices = (label[:,:,idx] != 0)
+      label_frame[indices,:] = label[indices,idx] * colors[idx]
     h,w = frame.shape[:-1]
     label_frame = cv2.resize(label_frame, (w,h), cv2.INTER_LINEAR)
     cv2.imshow('label', label_frame)
@@ -180,4 +198,5 @@ def visualize():
         return
 
 if __name__ == "__main__":
-    visualize()
+    process()
+    #visualize()

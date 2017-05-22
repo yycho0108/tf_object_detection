@@ -229,11 +229,7 @@ def get_random_cached_bottlenecks(sess, image_lists, how_many, category,
       filenames.append(image_name)
   else:
     # Retrieve all bottlenecks.
-    for image_index, image_name in enumerate(
-        image_lists[category]):
-
-      l = image_lists[category]
-      image_name = l[image_index % len(l)]
+    for image_index, image_name in enumerate(image_lists[category]):
       bottleneck, ground_truth = get_bottleneck(sess, image_name, jpeg_data_tensor, bottleneck_tensor)
       bottlenecks.append(bottleneck)
       ground_truths.append(ground_truth)
@@ -476,11 +472,11 @@ def add_final_training_ops(class_count, final_tensor_name, bottleneck_tensor):
 
       tf.summary.histogram('pre_activations', logits)
 
-  final_tensor = tf.nn.softmax(logits, name=final_tensor_name)
+  final_tensor = tf.nn.sigmoid(logits, name=final_tensor_name)
   tf.summary.histogram('activations', final_tensor)
 
   with tf.name_scope('cross_entropy'):
-    cross_entropy = tf.nn.softmax_cross_entropy_with_logits(
+    cross_entropy = tf.nn.sigmoid_cross_entropy_with_logits(
         labels=ground_truth_input, logits=logits)
     with tf.name_scope('total'):
       cross_entropy_mean = tf.reduce_mean(cross_entropy)
@@ -619,9 +615,7 @@ def main(_):
     # some new images we haven't used before.
     test_bottlenecks, test_ground_truth, test_filenames = (
         get_random_cached_bottlenecks(sess, image_lists, FLAGS.test_batch_size,
-                                      'testing', FLAGS.bottleneck_dir,
-                                      FLAGS.image_dir, jpeg_data_tensor,
-                                      bottleneck_tensor))
+                                      'testing', jpeg_data_tensor, bottleneck_tensor))
     test_accuracy, predictions = sess.run(
         [evaluation_step, prediction],
         feed_dict={bottleneck_input: test_bottlenecks,
