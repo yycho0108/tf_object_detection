@@ -13,6 +13,7 @@ python voc_process.py
 
 ### RESULTS
 
+![train](images/train.png)
 ![image\_0](images/image_0.png)
 ![image\_1](images/image_1.png)
 ![image\_2](images/image_2.png)
