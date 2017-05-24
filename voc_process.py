@@ -9,18 +9,21 @@ from tensorflow.python.util import compat
 
 import os
 import numpy as np
-
 import cv2
+
+from config import *
+
 
 ## VIZ PARAMS
 WHITE = np.asarray([255,255,255], dtype=np.uint8)
 colors = [WHITE]
 for i in range(20):
     color = cv2.cvtColor(np.asarray([[[i, 255, 255]]],dtype=np.uint8), cv2.COLOR_HSV2BGR)[0,0]
-    colors.append(color)
+    colors.append([int(c) for c in color])
 
-BOTTLENECK_TENSOR_NAME = 'mixed_10/join:0' ## (1,8,8,2048)
-BOTTLENECK_TENSOR_SIZE = 2048
+# mixed_2/join : 35
+# mixed_7/join : 17
+# mixed_10/join : 8
 
 MODEL_INPUT_WIDTH = 640
 MODEL_INPUT_HEIGHT = 480
@@ -42,15 +45,28 @@ def create_inception_graph():
         with gfile.FastGFile(model_filename, 'rb') as f:
             graph_def = tf.GraphDef()
             graph_def.ParseFromString(f.read())
-            bottleneck_tensor, jpeg_data_tensor, resized_input_tensor = (
-                tf.import_graph_def(graph_def, name='', return_elements=[
-                    BOTTLENECK_TENSOR_NAME, JPEG_DATA_TENSOR_NAME,
-                    RESIZED_INPUT_TENSOR_NAME]))
 
-    return graph, bottleneck_tensor, jpeg_data_tensor, resized_input_tensor
+            return_elements = list(OUTPUT_TENSOR_NAMES)
+            return_elements += [JPEG_DATA_TENSOR_NAME, RESIZED_INPUT_TENSOR_NAME]
+            results = tf.import_graph_def(graph_def, name='', return_elements = return_elements)
 
-def run_bottleneck_on_image(sess, image_data, image_data_tensor,
-                            bottleneck_tensor):
+            output_tensors = results[:-2]
+
+            ## ADD A POOL ...
+            for i, k in enumerate(APPEND_POOL):
+                name = ('aux_pool_%d' % i)
+                p = tf.nn.max_pool(output_tensors[-1],ksize=[1,2,2,1], strides=[1,2,2,1], padding='SAME', name=name)
+                output_tensors.append(p)
+
+            #for t in output_tensors:
+            #    print(t.name,t.shape)
+
+            jpeg_data_tensor = results[-2]
+            resized_input_tensor = results[-1]
+                    
+    return graph, output_tensors, jpeg_data_tensor, resized_input_tensor
+
+def run_bottleneck_on_image(sess, image_data, image_data_tensor, output_tensors):
   """Runs inference on an image to extract the 'bottleneck' summary layer.
 
   Args:
@@ -62,134 +78,133 @@ def run_bottleneck_on_image(sess, image_data, image_data_tensor,
   Returns:
     Numpy array of bottleneck values.
   """
-  bottleneck_values = sess.run(
-      bottleneck_tensor,
-      {image_data_tensor: image_data})
-  bottleneck_values = np.squeeze(bottleneck_values)
-  return bottleneck_values
+  output_values = sess.run(output_tensors, {image_data_tensor : image_data})
+  output_values = [np.squeeze(v) for v in output_values]
+  return output_values
+  #bottleneck_values = sess.run(
+  #    bottleneck_tensor,
+  #    {image_data_tensor: image_data})
+  #bottleneck_values = np.squeeze(bottleneck_values)
+  #return bottleneck_values
+
+flag1 = False
+flag2 = False
 
 def overlap(r_a, r_b):
     xa1,ya1,xa2,ya2 = r_a
     xb1,yb1,xb2,yb2 = r_b
     return max(0, min(xa2,xb2) - max(xa1,xb1)) * max(0, min(ya2,yb2) - max(ya1,yb1))
 
-def create_label(ann, categories):
-    width = int(ann.findChild('width').contents[0])
-    height = int(ann.findChild('height').contents[0])
-
-    num_classes = len(categories) + 1 # 0 = background
-
-    w_box = width / 8.0
-    h_box = height / 8.0
-
-    objs = ann.findAll('object')
-
-    label = np.zeros((8,8,num_classes), dtype=np.float32)
-
-    #bbox_label = np.zeros((8,8,num_classes,4), dtype=np.float32)
-
-    label[:, :, 0] = 1.0 # == background
-
-    for obj in objs:
-        category = obj.findChild('name').contents[0]
-
-        # 0 = background
-        idx = categories.index(category)
-        box = obj.findChild('bndbox')
-
-        xmin = int(box.findChild('xmin').contents[0])
-        ymin = int(box.findChild('ymin').contents[0])
-        xmax = int(box.findChild('xmax').contents[0])
-        ymax = int(box.findChild('ymax').contents[0])
-
-        for i in range(8):
-            for j in range(8):
-              box1 = (j * w_box, i * h_box, (j+1) * w_box, (i+1) * h_box)
-              box2 = (xmin, ymin, xmax, ymax)
-              o = overlap(box1, box2) / (w_box * h_box)
-              if o > 0:
-                label[i,j,idx] += o
-                label[i,j,0] = 0
-
-        #xmin = int(np.floor(xmin / w_box))
-        #ymin = int(np.floor(ymin / h_box))
-        #xmax = int(np.ceil(xmax / w_box))
-        #ymax = int(np.ceil(ymax / h_box))
-
-        #label[ymin:ymax, xmin:xmax, idx] = 1.0
-        #label[ymin:ymax, xmin:xmax, 0] = 0.0
-
-    return label
-
-def create_ssd_label(ann, categories):
-    width = int(ann.findChild('width').contents[0])
-    height = int(ann.findChild('height').contents[0])
+def create_ssd_label(ann, categories, output_shapes):
+    width = float(ann.findChild('width').contents[0])
+    height = float(ann.findChild('height').contents[0])
 
     num_classes = len(categories)
-
-    w_box = width / 8.0
-    h_box = height / 8.0
+    num_boxes = len(BBOX_RATIOS)
+    output_dims = num_classes + 5 * num_boxes 
 
     objs = ann.findAll('object')
 
-    label = np.zeros((8,8,num_classes + 4), dtype=np.float32)
+    labels = []
+    ious = []
 
-    label[:, :, 0] = 1.0 # == background
+    for s in output_shapes:
+        n, m = s
+        label_s = np.zeros((n,m, output_dims), dtype=np.float32)
+        iou_s = np.zeros((n,m, num_boxes), dtype=np.float32)
 
-    overlaps = np.zeros((8,8), dtype=np.float32)
+        for obj in objs:
+            category = obj.findChild('name').contents[0]
+            idx = categories.index(category)
+            box = obj.findChild('bndbox')
 
-    for obj in objs:
-        category = obj.findChild('name').contents[0]
+            xmin = float(box.findChild('xmin').contents[0])
+            ymin = float(box.findChild('ymin').contents[0])
+            xmax = float(box.findChild('xmax').contents[0])
+            ymax = float(box.findChild('ymax').contents[0])
 
-        idx = categories.index(category)
-        box = obj.findChild('bndbox')
+            ref_box = (xmin, ymin, xmax, ymax)
+            ref_w = (xmax - xmin)
+            ref_h = (ymax - ymin)
 
-        xmin = int(box.findChild('xmin').contents[0])
-        ymin = int(box.findChild('ymin').contents[0])
-        xmax = int(box.findChild('xmax').contents[0])
-        ymax = int(box.findChild('ymax').contents[0])
-        cx = (xmin + xmax) / 2
-        cy = (ymin + ymax) / 2
+            cx = (xmin + xmax) / 2
+            cy = (ymin + ymax) / 2
 
-        for i in range(8):
-            for j in range(8):
-              box1 = (j * w_box, i * h_box, (j+1) * w_box, (i+1) * h_box)
-              box2 = (xmin, ymin, xmax, ymax)
+            w_box = width / m
+            h_box = height / n
 
-              dx = (cx - ((2*j+1)*w_box / 2)) / w_box
-              dy = (cy - ((2*i+1)*h_box / 2)) / h_box
-              dw = (xmax - xmin) / w_box
-              dh = (ymax - ymin) / h_box
+            for i in range(n):
+                for j in range(m):
+                    cell_box = (j * w_box, i * h_box, (j+1) * w_box, (i+1) * h_box)
+                    o = overlap(ref_box, cell_box) / (w_box * h_box)
+                    label_s[i,j,idx] += o
 
-              o = overlap(box1, box2) / (w_box * h_box)
-              if o > overlaps[i,j]:
-                overlaps[i,j] = o # box that affects it most
-                label[i,j,idx] += o
-                label[i,j,-4:] = [dx,dy,dw,dh]
-              label[i,j,0] -= o
+                    x = (j+0.5) * w_box
+                    y = (i+0.5) * h_box
 
-        #xmin = int(np.floor(xmin / w_box))
-        #ymin = int(np.floor(ymin / h_box))
-        #xmax = int(np.ceil(xmax / w_box))
-        #ymax = int(np.ceil(ymax / h_box))
+                    #default boxes
+                    for box_idx, ratio in enumerate(BBOX_RATIOS):
+                        w_r, h_r = ratio
+                        w = w_box * w_r
+                        h = h_box * h_r
 
-        #label[ymin:ymax, xmin:xmax, idx] = 1.0
-        #label[ymin:ymax, xmin:xmax, 0] = 0.0
+                        box_i = (x-w/2,y-h/2,x+w/2,y+h/2)
 
-    return label
+                        o_i = overlap(ref_box, box_i)
+                        u_i = w*h + ref_w * ref_h - o_i
+                        iou_i = o_i / u_i  # == IOU
+
+                        base_idx = num_classes + 5 * box_idx
+                        if(i == 0 and j == 0):
+                            dx = (cx - x) / w_box
+                            dy = (cy - y) / h_box
+                            dw = (xmax - xmin) / w 
+                            dh = (ymax - ymin) / h 
+                        if iou_i > iou_s[i,j,box_idx]:
+                            # update
+                            dx = (cx - x) / w_box
+                            dy = (cy - y) / h_box
+                            dw = (xmax - xmin) / w 
+                            dh = (ymax - ymin) / h 
+
+                            iou_s[i,j,box_idx] = iou_i # remember max value
+                            label_s[i,j,base_idx:base_idx+5] = iou_i, dx, dy, dw, dh
+                        #print 'iou', iou_i
+                        #print 'dx', dx
+                        #print 'dy', dy
+                        #print 'dw', dw
+                        #print 'dh', dh
+
+
+
+        labels.append(label_s)
+    return labels
 
 def process():
     btl_dir = './workspace/bottlenecks'
+    if not os.path.isdir(btl_dir):
+        os.makedirs(btl_dir)
+        
 
-    graph, bottleneck_tensor, jpeg_data_tensor, resized_image_tensor = (
+    graph, output_tensors, jpeg_data_tensor, resized_image_tensor = (
       create_inception_graph())
 
     loader = VOCLoader('/home/yoonyoungcho/Downloads/VOCdevkit/VOC2012/')
 
-    categories = ['background'] + loader.list_image_sets()
+    categories = loader.list_image_sets()
     num_classes = len(categories)
 
     with tf.Session(graph = graph) as sess:
+        for op in graph.get_operations():
+            print('=====')
+            print(op.name)
+            print('\t Input :')
+            for i in op.inputs:
+                print('\t \t %s %s' % (i.name, str(i.shape)))
+            print('\t Output:')
+            for o in op.outputs:
+                print('\t \t %s %s' % (o.name, str(o.shape)))
+
         cnt = 0
         for ann in loader.annotations():
             cnt += 1
@@ -207,18 +222,18 @@ def process():
                 continue
 
             # run label
-            #label = create_label(ann, categories)
-            label = create_ssd_label(ann, categories)
-            np.save(bl_path, label, allow_pickle=True)
+            output_shapes = [t.shape.as_list()[1:3] for t in output_tensors]
+            labels = create_ssd_label(ann, categories, output_shapes)
+            np.save(bl_path, labels, allow_pickle=True)
 
             if os.path.exists(bv_path):
                 continue
 
             # run bottleneck
             image_data = gfile.FastGFile(img, 'rb').read()
-            bottleneck_values = run_bottleneck_on_image(sess, image_data, jpeg_data_tensor, bottleneck_tensor)
+            output_values = run_bottleneck_on_image(sess, image_data, jpeg_data_tensor, output_tensors)
             # save
-            np.save(bv_path, bottleneck_values, allow_pickle=True)
+            np.save(bv_path, output_values, allow_pickle=True)
 
             #VIZ
             #frame = cv2.imread(img)
@@ -236,33 +251,98 @@ def process():
 
 def visualize():
   loader = VOCLoader('/home/yoonyoungcho/Downloads/VOCdevkit/VOC2012/')
-  categories = ['background'] + loader.list_image_sets()
+  categories = loader.list_image_sets()
   num_classes = len(categories)
 
   for ann in loader.annotations():
     img = loader.img_from_annotation(ann)
     print img
+    output_shapes = [[35,35], [17,17], [8,8], [4,4], [2,2]]
 
-    label = create_label(ann, categories)
-    label_frame = np.zeros((8,8,3), dtype=np.uint8)
+    labels = create_ssd_label(ann, categories, output_shapes)
+    label_frames = []
 
     frame = cv2.imread(img)
     h,w = frame.shape[:-1]
 
-    for idx in range(num_classes):
-      indices = (label[:,:,idx] != 0)
-      label_frame[indices,:] = colors[idx]
-      if (len(np.nonzero(indices)[0]) > 0):
-        print categories[idx]
+    label_frames = []
+    for label in labels: # label per-bbox-aspects
+        rects = []
+        reg_rects = []
 
-    label_frame = cv2.resize(label_frame, (w,h), cv2.INTER_LINEAR)
-    cv2.imshow('label', label_frame)
+        n,m = label.shape[:2]
+        label_frame = np.zeros((n,m,3), dtype=np.uint8)
+
+        w_box = float(w) / m
+        h_box = float(h) / n
+
+        for i in range(n):
+            for j in range(m):
+                idx = np.argmax(label[i, j, :num_classes])
+                val = label[i,j,idx]
+                #if val < 0.5: # classification confidence
+                #    continue
+                label_frame[i,j,:] = colors[idx]
+                ncc = num_classes+1
+                bboxes = label[i,j,num_classes:].reshape(-1,5)
+                for box_idx, bbox in enumerate(bboxes):
+                    iou_i, dx, dy, dw, dh = bbox
+                    if iou_i < 0.2: # localization confidence
+                        continue
+                    b_x = w_box * (j+0.5)
+                    b_y = h_box * (i+0.5)
+
+                    w_r,h_r = BBOX_RATIOS[box_idx]
+                    b_w = w_box * w_r
+                    b_h = h_box * h_r
+
+                    p1 = (int(b_x - b_w/2), int(b_y - b_h/2))
+                    p2 = (int(b_x + b_w/2), int(b_y + b_h/2))
+                    rects.append((p1, p2,colors[idx]))
+                    b_x_r = b_x + dx*w_box
+                    b_y_r = b_y + dy*h_box
+                    b_w_r = b_w * dw
+                    b_h_r = b_h * dh 
+
+                    p1_r = (int(b_x_r - b_w_r/2), int(b_y_r - b_h_r/2))
+                    p2_r = (int(b_x_r + b_w_r/2), int(b_y_r + b_h_r/2))
+                    reg_rects.append((p1_r, p2_r, colors[idx]))
+
+                    
+        label_frame = cv2.resize(label_frame, (int(np.ceil(w)),int(np.ceil(h))), cv2.INTER_LINEAR)
+        for i in range(len(rects)):
+            #print reg_rects[i]
+            #print rects[i]
+            p1, p2, col = rects[i]
+            cv2.rectangle(frame, p1, p2, (255,0,0), 2)
+            p1, p2, col = reg_rects[i]
+            cv2.rectangle(frame, p1, p2, [int(c) for c in col], 2)
+            #cv2.imshow('frame', frame)
+            #if cv2.waitKey(0) == 27:
+            #    return
+        label_frames.append(label_frame)
+
     cv2.imshow('frame', frame)
-    overlay = cv2.addWeighted(label_frame, 0.5, frame, 0.5, 0.0)
-    cv2.imshow('overlay', overlay)
+    for i, label_frame in enumerate(label_frames):
+        cv2.imshow(('label_%d' % i), label_frame)
     if cv2.waitKey(0) == 27:
         return
 
+
+    #for idx in range(num_classes):
+    #  indices = (label[:,:,idx] != 0)
+    #  label_frame[indices,:] = colors[idx]
+    #  if (len(np.nonzero(indices)[0]) > 0):
+    #    print categories[idx]
+
+    #label_frame = cv2.resize(label_frame, (w,h), cv2.INTER_LINEAR)
+    #cv2.imshow('label', label_frame)
+    #cv2.imshow('frame', frame)
+    #overlay = cv2.addWeighted(label_frame, 0.5, frame, 0.5, 0.0)
+    #cv2.imshow('overlay', overlay)
+    #if cv2.waitKey(0) == 27:
+    #    return
+
 if __name__ == "__main__":
-    #process()
-    visualize()
+    process()
+    #visualize()
