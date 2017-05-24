@@ -280,14 +280,14 @@ def visualize():
             for j in range(m):
                 idx = np.argmax(label[i, j, :num_classes])
                 val = label[i,j,idx]
-                #if val < 0.5: # classification confidence
-                #    continue
+                if val < 0.5: # classification confidence
+                    continue
                 label_frame[i,j,:] = colors[idx]
                 ncc = num_classes+1
                 bboxes = label[i,j,num_classes:].reshape(-1,5)
                 for box_idx, bbox in enumerate(bboxes):
                     iou_i, dx, dy, dw, dh = bbox
-                    if iou_i < 0.2: # localization confidence
+                    if iou_i < 0.3: # localization confidence
                         continue
                     b_x = w_box * (j+0.5)
                     b_y = h_box * (i+0.5)
@@ -344,5 +344,5 @@ def visualize():
     #    return
 
 if __name__ == "__main__":
-    process()
-    #visualize()
+    #process()
+    visualize()

@@ -144,6 +144,16 @@ def create_image_lists(testing_percentage, validation_percentage):
         'validation': validation_images,
       }
 
+def report_graph(graph):
+    for op in graph.get_operations():
+        print('==' + op.name + '===')
+        print('\t Input : ')
+        for t in op.inputs:
+            print('\t \t %s : %s' % (t.name, str(t.shape)))
+        print('\t Output : ')
+        for t in op.outputs:
+            print('\t \t %s : %s' % (t.name, str(t.shape)))
+
 def create_inception_graph():
     """"Creates a graph from saved GraphDef file and returns a Graph object.
 
@@ -152,6 +162,8 @@ def create_inception_graph():
       manipulating.
     """
     with tf.Graph().as_default() as graph:
+
+
         model_filename = os.path.join('./workspace/inception',
             'classify_image_graph_def.pb')
         with gfile.FastGFile(model_filename, 'rb') as f:
@@ -163,6 +175,7 @@ def create_inception_graph():
             results = tf.import_graph_def(graph_def, name='', return_elements = return_elements)
 
             bottleneck_tensors = results[:-2]
+            #print('bttt', bottleneck_tensors) # ===> list
 
             ## ADD A POOL ...
             for i, k in enumerate(APPEND_POOL):
@@ -170,12 +183,10 @@ def create_inception_graph():
                 p = tf.nn.max_pool(bottleneck_tensors[-1],ksize=[1,2,2,1], strides=[1,2,2,1], padding='SAME', name=name)
                 bottleneck_tensors.append(p)
 
-            #for t in bottleneck_tensors:
-            #    print(t.name,t.shape)
-
             jpeg_data_tensor = results[-2]
             resized_input_tensor = results[-1]
                     
+    report_graph(graph)
     return graph, bottleneck_tensors, jpeg_data_tensor, resized_input_tensor
 
 def get_bottleneck(sess, name, jpeg_data_tensor):
@@ -219,22 +230,37 @@ def get_random_cached_bottlenecks(sess, image_lists, how_many, category,
   filenames = []
   if how_many >= 0:
     # Retrieve a random sample of bottlenecks.
+    # returned data = [batch_size, [num_clf, ...]]
     for _ in range(how_many):
       l = image_lists[category]
       image_index = random.randrange(MAX_NUM_IMAGES_PER_CLASS + 1)
       image_name = l[image_index % len(l)]
-      output, ground_truth = get_bottleneck(sess, image_name, jpeg_data_tensor)
-      bottlenecks.append(output)
+
+      bottleneck, ground_truth = get_bottleneck(sess, image_name, jpeg_data_tensor)
+      # [bottleneck] is a list of ndarrays
+      bottlenecks.append(bottleneck)
       ground_truths.append(ground_truth)
+
       filenames.append(image_name)
   else:
     # Retrieve all bottlenecks.
     for image_index, image_name in enumerate(image_lists[category]):
       bottleneck, ground_truth = get_bottleneck(sess, image_name, jpeg_data_tensor)
-      bottlenecks.append(output)
+
+      bottlenecks.append(bottleneck)
       ground_truths.append(ground_truth)
+
       filenames.append(image_name)
-  return bottlenecks, ground_truths, filenames
+
+  formatted_btl = np.transpose(bottlenecks)
+  formatted_btl = [np.stack(a,0) for a in formatted_btl]
+
+  formatted_gt = np.transpose(ground_truths)
+  formatted_gt = [np.stack(a,0) for a in formatted_gt]
+
+  #formatted_btl = [np.stack([b[i] for b in bottlenecks], axis=0) for i in range(n)]
+  #formatted_gt = [np.stack([g[i] for g in ground_truths], axis=0) for i in range(n)]
+  return formatted_btl, formatted_gt, filenames
 
 #def get_random_distorted_bottlenecks(
 #    sess, image_lists, how_many, category, image_dir, input_jpeg_tensor,
@@ -409,17 +435,18 @@ def variable_summaries(var):
         tf.summary.scalar('min', tf.reduce_min(var))
         tf.summary.histogram('histogram', var)
 
-def add_final_training_op(final_tensor_name, bottleneck_tensor):
+def add_final_training_op(bottleneck_tensor):
 
     btl_shape = bottleneck_tensor.shape.as_list()
 
     n = btl_shape[1]
     m = btl_shape[2]
+    k = btl_shape[3]
 
     with tf.name_scope('input'):
         shape = [None] + bottleneck_tensor.shape.dims
         bottleneck_input = tf.placeholder_with_default(
-                bottleneck_tensor, shape=[None] + btl_shape[1:],
+                bottleneck_tensor, shape=[None,n,m,k],
                 name='BottleneckInputPlaceholder')
         ground_truth_input = tf.placeholder(tf.float32,
                 [None, n, m, OUTPUT_DIMS],
@@ -441,7 +468,7 @@ def add_final_training_op(final_tensor_name, bottleneck_tensor):
         g_clf, g_bnd = tf.split(ground_truth_input, [NUM_CLASSES, 5*NUM_BOXES], 3, name='g_split') # ground truth
         n_clf, n_bnd = tf.split(outputs, [NUM_CLASSES, 5*NUM_BOXES], 3, name='n_split') # network output
 
-    final_tensor = tf.nn.softmax(n_clf, name=final_tensor_name)
+    n_clf_s = tf.nn.softmax(n_clf, name='n_clf')
     tf.summary.histogram('activations', n_clf)
 
     with tf.name_scope('cross_entropy'):
@@ -450,50 +477,100 @@ def add_final_training_op(final_tensor_name, bottleneck_tensor):
       with tf.name_scope('total'):
         cross_entropy_mean = tf.reduce_mean(cross_entropy)
 
-    with tf.name_scope('bbox'):
-        #matched_idx = tf.where ( Object Found && IOU is greather than ... )
-        # Loop over each box ... 
-        # g_clf = [None, 8, 8, 21]
-        idx = tf.where(g_clf[:,:,:,0] < 1.0) # [None, 8, 8]
-        # no loss unless it isn't considered background!
-        g = tf.gather_nd(g_bnd, idx)
-        n = tf.gather_nd(n_bnd, idx)
-        diff = (g-n)/64.
-        bbox_loss = tf.reduce_mean(tf.abs(diff))
-        bbox_mean = tf.reduce_mean(bbox_loss)
+    with tf.name_scope('bbox_loss'):
+        #g_bnd = (batch_size, n, m, 5*NUM_BOXES]
+        bboxes = tf.split(g_bnd, NUM_BOXES, axis=3, name='bbox_split')
+        for bbox in bboxes:
+            iou = bbox[:,:,:,0]
+            idx = tf.where(iou > 0.2) #TODO : Maybe This would work
+            g = tf.gather_nd(g_bnd, idx) # l1 loss
+            n = tf.gather_nd(n_bnd, idx)
+            bbox_loss = tf.reduce_mean(tf.abs(g-n))
 
     tf.summary.scalar('cross_entropy', cross_entropy_mean)
-    tf.summary.scalar('bbox_loss', bbox_mean)
-    loss = cross_entropy_mean + bbox_mean 
+    tf.summary.scalar('bbox_loss', bbox_loss)
+    loss = cross_entropy_mean + bbox_loss
     tf.summary.scalar('net_loss', loss)
 
-    return (loss, cross_entropy_mean, bottleneck_input, ground_truth_input, final_tensor)
+    return (loss, cross_entropy_mean, bottleneck_input, ground_truth_input, n_clf_s, n_bnd)
 
 
-def add_final_training_ops(final_tensor_name, bottleneck_tensors):
+def add_final_training_ops(bottleneck_tensors):
     net_loss = tf.Variable(0.0, name="net_loss")
     net_cross_entropy_mean = tf.Variable(0.0, name="net_cross_entropy")
     bottleneck_inputs = []
     ground_truth_inputs = []
-    final_tensors = []
+    n_clfs = []
+    n_bnds = []
+    losses = []
+    cross_entropy_means= []
 
+    n = len(bottleneck_tensors)
     for i, bottleneck_tensor in enumerate(bottleneck_tensors):
         with tf.name_scope('btl_%d' % i):
-            loss, cross_entropy_mean, bottleneck_input, ground_truth_input, final_tensor = add_final_training_op(final_tensor_name, bottleneck_tensor)
-            net_loss += loss
-            net_cross_entropy_mean += cross_entropy_mean
+            loss, cross_entropy_mean, bottleneck_input, ground_truth_input, n_clf, n_bnd = add_final_training_op(bottleneck_tensor)
+            losses.append(loss)
+            cross_entropy_means.append(cross_entropy_mean)
             bottleneck_inputs.append(bottleneck_input)
             ground_truth_inputs.append(ground_truth_input)
-            final_tensors.append(final_tensor)
+            n_clfs.append(n_clf)
+            n_bnds.append(n_bnd)
+
+    net_loss = tf.reduce_mean(losses)
+    net_cross_entropy_mean = tf.reduce_mean(cross_entropy_means)
 
     with tf.name_scope('train'):
         ## TODO : replace optimizer?
         optimizer = tf.train.GradientDescentOptimizer(FLAGS.learning_rate)
         train_step = optimizer.minimize(net_loss)
 
-    return (train_step, net_cross_entropy_mean, bottleneck_inputs, ground_truth_inputs, final_tensor)
+    return (train_step, net_cross_entropy_mean, bottleneck_inputs, ground_truth_inputs, n_clfs, n_bnds)
 
-def add_evaluation_step(final_tensor, ground_truth_tensor):
+
+def add_evaluation_step(n_clf, n_bnd, ground_truth_tensor, idx):
+    """Inserts the operations we need to evaluate the accuracy of our results.
+
+    Args:
+      result_tensor: The new final node that produces results.
+      ground_truth_tensor: The node we feed ground truth data
+      into.
+
+    Returns:
+      Tuple of (evaluation step, prediction).
+    """
+    with tf.name_scope('accuracy'):
+        with tf.name_scope('correct_prediction'):
+            #w_r,h_r = BBOX_RATIOS[idx]
+
+            g_clf, g_bnd = tf.split(ground_truth_tensor, [NUM_CLASSES,5*NUM_BOXES], 3) # ground truth
+            #n_clf, n_bnd = tf.split(final_tensor, [NUM_CLASSES,5*NUM_BOXES], 3) # ground truth
+
+            #[batch,grid_i,grid_j,classes]
+            g_clf_pred = tf.argmax(g_clf,axis=3) # class-prediction
+            g_clf_val = tf.reduce_max(g_clf, axis=3)
+            g_clf_mask = tf.greater(g_clf_val, 0.5) # = where object was identified
+            g_clf_indices = tf.where(g_clf_mask)
+            #g_iou_mask = tf.greater(g_bnd[:,:,:,0], 0.2) # = where bbox was identified 
+            #g_bbox_indices = tf.where(tf.not_equal(tf.logical_and(g_clf_mask, g_iou_mask), 0))
+
+            n_clf_pred = tf.argmax(n_clf,axis=3) # class-prediction
+            #n_clf_val = tf.reduce_max(n_clf, axis=3)
+            #n_clf_mask = tf.greater(n_clf_val, 0.5) # = where object was identified
+            #n_iou_mask = tf.greater(n_bnd[:,:,:,0], 0.2) # = where bbox was identified 
+            #n_bbox_indices = tf.where(tf.not_equal(tf.logical_and(n_clf_mask, n_iou_mask), 0))
+
+            accuracy = tf.reduce_mean(tf.cast(tf.gather_nd( tf.equal(g_clf_pred, n_clf_pred), g_clf_indices),  tf.float32)) # just classification accuracy
+
+            #box_pred = tf.gather_nd(n_bbox_indices,n_bnd) 
+
+            #prediction = tf.greater(n_clf, 0.5)
+            #ground_truth_prediction = tf.greater(g_clf, 0.5)
+            #correct_prediction = tf.cast(tf.equal(prediction, ground_truth_prediction), tf.float32)
+            #accuracy = tf.reduce_mean(correct_prediction)
+
+    return accuracy #bbox, accuracy 
+
+def add_evaluation_steps(n_clfs, n_bnds, ground_truth_tensors):
   """Inserts the operations we need to evaluate the accuracy of our results.
 
   Args:
@@ -504,50 +581,22 @@ def add_evaluation_step(final_tensor, ground_truth_tensor):
   Returns:
     Tuple of (evaluation step, prediction).
   """
-  with tf.name_scope('accuracy'):
-    with tf.name_scope('correct_prediction'):
-      # currently editing evaluation step
-      g_clf, g_bnd = tf.split(ground_truth_tensor, [21,4], 3) # ground truth
-      n_clf = final_tensor #tf.split(result_tensor, [21,4], 3) # network output
-
-      prediction = tf.greater(n_clf, 0.5)
-      ground_truth_prediction = tf.greater(g_clf, 0.5)
-      correct_prediction = tf.cast(tf.equal(prediction, ground_truth_prediction), tf.float32)
-      accuracy = tf.reduce_mean(correct_prediction)
-  tf.summary.scalar('accuracy', accuracy)
-  return prediction, accuracy 
-
-def add_evaluation_steps(final_tensors, ground_truth_tensors):
-  """Inserts the operations we need to evaluate the accuracy of our results.
-
-  Args:
-    result_tensor: The new final node that produces results.
-    ground_truth_tensor: The node we feed ground truth data
-    into.
-
-  Returns:
-    Tuple of (evaluation step, prediction).
-  """
-  predictions = []
+  #predictions = []
   accuracies = []
-  for final_tensor, ground_truth_tensor in zip(final_tensors, ground_truth_tensors):
-      prediction, accuracy = add_evaluation_step(final_tensor, ground_truth_tensor)
-      predictions.append(prediction)
-      accuracies.append(accuracy)
+  i = 0
+  n = len(n_clfs)
+  for i in range(n):
+      with tf.name_scope('eval_%d' % i):
+          gt = ground_truth_tensors[i]
+          accuracy = add_evaluation_step(n_clfs[i], n_bnds[i], gt, i)
+          #prediction, accuracy = add_evaluation_step(ft, gt)
+          #predictions.append(prediction)
+          accuracies.append(accuracy)
+      i += 1
+  accuracy = tf.reduce_mean(accuracies)
+  
+  tf.summary.scalar('accuracy', accuracy)
   return tf.reduce_mean(accuracy)
-
-  with tf.name_scope('accuracy'):
-    with tf.name_scope('correct_prediction'):
-      # currently editing evaluation step
-      g_clf, g_bnd = tf.split(ground_truth_tensor, [21,4], 3) # ground truth
-      n_clf = final_tensor #tf.split(result_tensor, [21,4], 3) # network output
-
-      prediction = tf.greater(n_clf, 0.5)
-      ground_truth_prediction = tf.greater(g_clf, 0.5)
-      correct_prediction = tf.cast(tf.equal(prediction, ground_truth_prediction), tf.float32)
-      evaluation_step = tf.reduce_mean(correct_prediction)
-  tf.summary.scalar('accuracy', evaluation_step)
-  return prediction, evaluation_step
 
 
 def main(_):
@@ -559,6 +608,8 @@ def main(_):
   # Set up the pre-trained graph.
   graph, bottleneck_tensors, jpeg_data_tensor, resized_image_tensor = (
       create_inception_graph())
+
+  #bottleneck_tensors = list
 
   # Look at the folder structure, and create lists of all the images.
   image_lists = create_image_lists(FLAGS.testing_percentage, FLAGS.validation_percentage)
@@ -578,12 +629,10 @@ def main(_):
            FLAGS.random_scale, FLAGS.random_brightness)
 
     # Add the new layer that we'll be training.
-    (train_step, cross_entropy, bottleneck_inputs, ground_truth_inputs,
-     final_tensors) = add_final_training_ops(FLAGS.final_tensor_name, bottleneck_tensors)
+    (train_step, cross_entropy, bottleneck_inputs, ground_truth_inputs, n_clfs, n_bnds) = add_final_training_ops(bottleneck_tensors)
 
     # Create the operations we need to evaluate the accuracy of our new layer.
-    prediction, evaluation_step = add_evaluation_steps(
-        final_tensors, ground_truth_inputs)
+    evaluation_step = add_evaluation_steps(n_clfs, n_bnds, ground_truth_inputs)
 
     # Merge all the summaries and write them out to the summaries_dir
     merged = tf.summary.merge_all()
@@ -604,8 +653,7 @@ def main(_):
       # Get a batch of input bottleneck values, either calculated fresh every
       # time with distortions applied, or from the cache stored on disk.
       if do_distort_images:
-        (train_bottlenecks,
-         train_ground_truth) = get_random_distorted_bottlenecks(
+        (train_bottlenecks, train_ground_truths) = get_random_distorted_bottlenecks(
              sess, image_lists, FLAGS.train_batch_size, 'training',
              FLAGS.image_dir, distorted_jpeg_data_tensor,
              distorted_image_tensor, resized_image_tensor, bottleneck_tensor)
@@ -616,10 +664,17 @@ def main(_):
       # Feed the bottlenecks and ground truth into the graph, and run a training
       # step. Capture training summaries for TensorBoard with the `merged` op.
 
+      feed_dict = {}
+      for gt, tgt in zip(ground_truth_inputs, train_ground_truths):
+          print('gt', gt.shape)
+          print('tgt', tgt.shape)
+          feed_dict[gt] = tgt
+      for bt, tbt in zip(bottleneck_tensors, train_bottlenecks):
+          feed_dict[bt] = tbt
+
       train_summary, _ = sess.run(
           [merged, train_step],
-          feed_dict={bottleneck_tensors: train_bottlenecks,
-                     ground_truth_inputs: train_ground_truths}) # if this doesn't work, manually construct feed_dict
+          feed_dict=feed_dict) # if this doesn't work, manually construct feed_dict
 
       train_writer.add_summary(train_summary, i)
 
@@ -628,8 +683,7 @@ def main(_):
       if (i % FLAGS.eval_step_interval) == 0 or is_last_step:
         train_accuracy, cross_entropy_value = sess.run(
             [evaluation_step, cross_entropy],
-            feed_dict={bottleneck_input: train_bottlenecks,
-                       ground_truth_input: train_ground_truth})
+            feed_dict=feed_dict)
         print('%s: Step %d: Train accuracy = %.1f%%' % (datetime.now(), i,
                                                         train_accuracy * 100))
         print('%s: Step %d: Cross entropy = %f' % (datetime.now(), i,
@@ -637,7 +691,7 @@ def main(_):
         validation_bottlenecks, validation_ground_truth, _ = (
             get_random_cached_bottlenecks(
                 sess, image_lists, FLAGS.validation_batch_size, 'validation',
-                jpeg_data_tensor, bottleneck_tensor))
+                jpeg_data_tensor))
         # Run a validation step and capture training summaries for TensorBoard
         # with the `merged` op.
         validation_summary, validation_accuracy = sess.run(
@@ -665,15 +719,16 @@ def main(_):
       
     # We've completed all our training, so run a final test evaluation on
     # some new images we haven't used before.
-    test_bottlenecks, test_ground_truth, test_filenames = (
-        get_random_cached_bottlenecks(sess, image_lists, FLAGS.test_batch_size,
-                                      'testing', jpeg_data_tensor, bottleneck_tensor))
-    test_accuracy, predictions = sess.run(
-        [evaluation_step, prediction],
-        feed_dict={bottleneck_input: test_bottlenecks,
-                   ground_truth_input: test_ground_truth})
-    print('Final test accuracy = %.1f%% (N=%d)' % (
-        test_accuracy * 100, len(test_bottlenecks)))
+
+    #test_bottlenecks, test_ground_truth, test_filenames = (
+    #    get_random_cached_bottlenecks(sess, image_lists, FLAGS.test_batch_size,
+    #                                  'testing', jpeg_data_tensor, bottleneck_tensor))
+    #test_accuracy, predictions = sess.run(
+    #    [evaluation_step, prediction],
+    #    feed_dict={bottleneck_input: test_bottlenecks,
+    #               ground_truth_input: test_ground_truth})
+    #print('Final test accuracy = %.1f%% (N=%d)' % (
+    #    test_accuracy * 100, len(test_bottlenecks)))
 
     #if FLAGS.print_misclassified_test_images:
     #  print('=== MISCLASSIFIED TEST IMAGES ===')
