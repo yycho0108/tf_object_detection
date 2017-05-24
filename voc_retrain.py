@@ -178,10 +178,10 @@ def create_inception_graph():
             #print('bttt', bottleneck_tensors) # ===> list
 
             ## ADD A POOL ...
-            #for i, k in enumerate(APPEND_POOL):
-            #    name = ('aux_pool_%d' % i)
-            #    p = tf.nn.max_pool(bottleneck_tensors[-1],ksize=[1,2,2,1], strides=[1,2,2,1], padding='SAME', name=name)
-            #    bottleneck_tensors.append(p)
+            for i, k in enumerate(APPEND_POOL):
+                name = ('aux_pool_%d' % i)
+                p = tf.nn.max_pool(bottleneck_tensors[-1],ksize=[1,2,2,1], strides=[1,2,2,1], padding='SAME', name=name)
+                bottleneck_tensors.append(p)
 
             jpeg_data_tensor = results[-2]
             resized_input_tensor = results[-1]
@@ -650,58 +650,62 @@ def main(_):
 
     # Run the training for as many cycles as requested on the command line.
     def train(i):
-      # Get a batch of input bottleneck values, either calculated fresh every
-      # time with distortions applied, or from the cache stored on disk.
-      if do_distort_images:
-        (train_bottlenecks, train_ground_truths) = get_random_distorted_bottlenecks(
-             sess, image_lists, FLAGS.train_batch_size, 'training',
-             FLAGS.image_dir, distorted_jpeg_data_tensor,
-             distorted_image_tensor, resized_image_tensor, bottleneck_tensor)
-      else:
-        (train_bottlenecks, train_ground_truths, _) = get_random_cached_bottlenecks(
-             sess, image_lists, FLAGS.train_batch_size, 'training',
-             jpeg_data_tensor)
-      # Feed the bottlenecks and ground truth into the graph, and run a training
-      # step. Capture training summaries for TensorBoard with the `merged` op.
+        # Get a batch of input bottleneck values, either calculated fresh every
+        # time with distortions applied, or from the cache stored on disk.
+        if do_distort_images:
+            (train_bottlenecks, train_ground_truths) = get_random_distorted_bottlenecks(
+                 sess, image_lists, FLAGS.train_batch_size, 'training',
+                 FLAGS.image_dir, distorted_jpeg_data_tensor,
+                 distorted_image_tensor, resized_image_tensor, bottleneck_tensor)
+        else:
+            (train_bottlenecks, train_ground_truths, _) = get_random_cached_bottlenecks(
+                 sess, image_lists, FLAGS.train_batch_size, 'training',
+                 jpeg_data_tensor)
+        # Feed the bottlenecks and ground truth into the graph, and run a training
+        # step. Capture training summaries for TensorBoard with the `merged` op.
 
-      feed_dict = {}
-      for gt, tgt in zip(ground_truth_inputs, train_ground_truths):
-          print('gt', gt.shape)
-          print('tgt', tgt.shape)
-          feed_dict[gt] = tgt
-      for bt, tbt in zip(bottleneck_tensors, train_bottlenecks):
-          feed_dict[bt] = tbt
+        feed_dict = {}
+        for gt, tgt in zip(ground_truth_inputs, train_ground_truths):
+            feed_dict[gt] = tgt
+        for bt, tbt in zip(bottleneck_inputs, train_bottlenecks):
+            feed_dict[bt] = tbt
 
-      train_summary, _ = sess.run(
-          [merged, train_step],
-          feed_dict=feed_dict) # if this doesn't work, manually construct feed_dict
+        train_summary, _ = sess.run(
+            [merged, train_step],
+            feed_dict=feed_dict) # if this doesn't work, manually construct feed_dict
 
-      train_writer.add_summary(train_summary, i)
+        train_writer.add_summary(train_summary, i)
 
-      # Every so often, print out how well the graph is training.
-      is_last_step = (i + 1 == FLAGS.how_many_training_steps)
-      if (i % FLAGS.eval_step_interval) == 0 or is_last_step:
-        train_accuracy, cross_entropy_value = sess.run(
-            [evaluation_step, cross_entropy],
-            feed_dict=feed_dict)
-        print('%s: Step %d: Train accuracy = %.1f%%' % (datetime.now(), i,
-                                                        train_accuracy * 100))
-        print('%s: Step %d: Cross entropy = %f' % (datetime.now(), i,
-                                                   cross_entropy_value))
-        validation_bottlenecks, validation_ground_truth, _ = (
-            get_random_cached_bottlenecks(
-                sess, image_lists, FLAGS.validation_batch_size, 'validation',
-                jpeg_data_tensor))
-        # Run a validation step and capture training summaries for TensorBoard
-        # with the `merged` op.
-        validation_summary, validation_accuracy = sess.run(
-            [merged, evaluation_step],
-            feed_dict={bottleneck_input: validation_bottlenecks,
-                       ground_truth_input: validation_ground_truth})
-        validation_writer.add_summary(validation_summary, i)
-        print('%s: Step %d: Validation accuracy = %.1f%% (N=%d)' %
-              (datetime.now(), i, validation_accuracy * 100,
-               len(validation_bottlenecks)))
+        # Every so often, print out how well the graph is training.
+        is_last_step = (i + 1 == FLAGS.how_many_training_steps)
+        if (i % FLAGS.eval_step_interval) == 0 or is_last_step:
+            train_accuracy, cross_entropy_value = sess.run(
+                [evaluation_step, cross_entropy],
+                feed_dict=feed_dict)
+            print('%s: Step %d: Train accuracy = %.1f%%' % (datetime.now(), i,
+                                                            train_accuracy * 100))
+            print('%s: Step %d: Cross entropy = %f' % (datetime.now(), i,
+                                                       cross_entropy_value))
+            valid_bottlenecks, valid_ground_truths, _ = (
+                get_random_cached_bottlenecks(
+                    sess, image_lists, FLAGS.validation_batch_size, 'validation',
+                    jpeg_data_tensor))
+
+            valid_feed_dict = {}
+            for gt, vgt in zip(ground_truth_inputs, valid_ground_truths):
+                valid_feed_dict[gt] = vgt
+            for bt, vbt in zip(bottleneck_inputs, valid_bottlenecks):
+                valid_feed_dict[bt] = vbt
+
+            # Run a validation step and capture training summaries for TensorBoard
+            # with the `merged` op.
+            validation_summary, validation_accuracy = sess.run(
+                [merged, evaluation_step],
+                feed_dict=valid_feed_dict)
+            validation_writer.add_summary(validation_summary, i)
+            print('%s: Step %d: Validation accuracy = %.1f%% (N=%d)' %
+                  (datetime.now(), i, validation_accuracy * 100,
+                   len(valid_bottlenecks)))
 
     n = FLAGS.how_many_training_steps
     now = 0
