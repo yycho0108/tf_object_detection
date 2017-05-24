@@ -178,10 +178,10 @@ def create_inception_graph():
             #print('bttt', bottleneck_tensors) # ===> list
 
             ## ADD A POOL ...
-            for i, k in enumerate(APPEND_POOL):
-                name = ('aux_pool_%d' % i)
-                p = tf.nn.max_pool(bottleneck_tensors[-1],ksize=[1,2,2,1], strides=[1,2,2,1], padding='SAME', name=name)
-                bottleneck_tensors.append(p)
+            #for i, k in enumerate(APPEND_POOL):
+            #    name = ('aux_pool_%d' % i)
+            #    p = tf.nn.max_pool(bottleneck_tensors[-1],ksize=[1,2,2,1], strides=[1,2,2,1], padding='SAME', name=name)
+            #    bottleneck_tensors.append(p)
 
             jpeg_data_tensor = results[-2]
             resized_input_tensor = results[-1]
