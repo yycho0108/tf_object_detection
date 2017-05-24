@@ -163,7 +163,7 @@ def create_ssd_label(ann, categories):
 
               o = overlap(box1, box2) / (w_box * h_box)
               if o > overlaps[i,j]:
-                overlaps[i,j] = o
+                overlaps[i,j] = o # box that affects it most
                 label[i,j,idx] += o
                 label[i,j,-4:] = [dx,dy,dw,dh]
               label[i,j,0] -= o

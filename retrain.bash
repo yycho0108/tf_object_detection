@@ -7,6 +7,6 @@ python voc_retrain.py \
 	--output_graph=workspace/graph.pb \
 	--output_labels=workspace/labels.txt \
 	--image_dir=data/ \
-	--learning_rate=0.005 \
-	--how_many_training_steps=100 \
+	--learning_rate=0.001 \
+	--how_many_training_steps=20000 \
 	--test_batch_size=100
