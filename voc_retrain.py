@@ -309,109 +309,109 @@ def should_distort_images(flip_left_right, random_crop, random_scale,
 
 
 def add_input_distortions(flip_left_right, random_crop, random_scale,
-                          random_brightness):
-  """Creates the operations to apply the specified distortions.
+                            random_brightness):
+    """Creates the operations to apply the specified distortions.
 
-  During training it can help to improve the results if we run the images
-  through simple distortions like crops, scales, and flips. These reflect the
-  kind of variations we expect in the real world, and so can help train the
-  model to cope with natural data more effectively. Here we take the supplied
-  parameters and construct a network of operations to apply them to an image.
+    During training it can help to improve the results if we run the images
+    through simple distortions like crops, scales, and flips. These reflect the
+    kind of variations we expect in the real world, and so can help train the
+    model to cope with natural data more effectively. Here we take the supplied
+    parameters and construct a network of operations to apply them to an image.
 
-  Cropping
-  ~~~~~~~~
+    Cropping
+    ~~~~~~~~
 
-  Cropping is done by placing a bounding box at a random position in the full
-  image. The cropping parameter controls the size of that box relative to the
-  input image. If it's zero, then the box is the same size as the input and no
-  cropping is performed. If the value is 50%, then the crop box will be half the
-  width and height of the input. In a diagram it looks like this:
+    Cropping is done by placing a bounding box at a random position in the full
+    image. The cropping parameter controls the size of that box relative to the
+    input image. If it's zero, then the box is the same size as the input and no
+    cropping is performed. If the value is 50%, then the crop box will be half the
+    width and height of the input. In a diagram it looks like this:
 
-  <       width         >
-  +---------------------+
-  |                     |
-  |   width - crop%     |
-  |    <      >         |
-  |    +------+         |
-  |    |      |         |
-  |    |      |         |
-  |    |      |         |
-  |    +------+         |
-  |                     |
-  |                     |
-  +---------------------+
+    <       width         >
+    +---------------------+
+    |                     |
+    |   width - crop%     |
+    |    <      >         |
+    |    +------+         |
+    |    |      |         |
+    |    |      |         |
+    |    |      |         |
+    |    +------+         |
+    |                     |
+    |                     |
+    +---------------------+
 
-  Scaling
-  ~~~~~~~
+    Scaling
+    ~~~~~~~
 
-  Scaling is a lot like cropping, except that the bounding box is always
-  centered and its size varies randomly within the given range. For example if
-  the scale percentage is zero, then the bounding box is the same size as the
-  input and no scaling is applied. If it's 50%, then the bounding box will be in
-  a random range between half the width and height and full size.
+    Scaling is a lot like cropping, except that the bounding box is always
+    centered and its size varies randomly within the given range. For example if
+    the scale percentage is zero, then the bounding box is the same size as the
+    input and no scaling is applied. If it's 50%, then the bounding box will be in
+    a random range between half the width and height and full size.
 
-  Args:
-    flip_left_right: Boolean whether to randomly mirror images horizontally.
-    random_crop: Integer percentage setting the total margin used around the
-    crop box.
-    random_scale: Integer percentage of how much to vary the scale by.
-    random_brightness: Integer range to randomly multiply the pixel values by.
-    graph.
+    Args:
+      flip_left_right: Boolean whether to randomly mirror images horizontally.
+      random_crop: Integer percentage setting the total margin used around the
+      crop box.
+      random_scale: Integer percentage of how much to vary the scale by.
+      random_brightness: Integer range to randomly multiply the pixel values by.
+      graph.
 
-  Returns:
-    The jpeg input layer and the distorted result tensor.
-  """
+    Returns:
+      The jpeg input layer and the distorted result tensor.
+    """
 
-  jpeg_data = tf.placeholder(tf.string, name='DistortJPGInput')
-  decoded_image = tf.image.decode_jpeg(jpeg_data, channels=MODEL_INPUT_DEPTH)
-  decoded_image_as_float = tf.cast(decoded_image, dtype=tf.float32)
-  decoded_image_4d = tf.expand_dims(decoded_image_as_float, 0)
-  margin_scale = 1.0 + (random_crop / 100.0)
-  resize_scale = 1.0 + (random_scale / 100.0)
-  margin_scale_value = tf.constant(margin_scale)
-  resize_scale_value = tf.random_uniform(tensor_shape.scalar(),
-                                         minval=1.0,
-                                         maxval=resize_scale)
-  scale_value = tf.multiply(margin_scale_value, resize_scale_value)
-  precrop_width = tf.multiply(scale_value, MODEL_INPUT_WIDTH)
-  precrop_height = tf.multiply(scale_value, MODEL_INPUT_HEIGHT)
-  precrop_shape = tf.stack([precrop_height, precrop_width])
-  precrop_shape_as_int = tf.cast(precrop_shape, dtype=tf.int32)
-  precropped_image = tf.image.resize_bilinear(decoded_image_4d,
-                                              precrop_shape_as_int)
-  precropped_image_3d = tf.squeeze(precropped_image, squeeze_dims=[0])
-  cropped_image = tf.random_crop(precropped_image_3d,
-                                 [MODEL_INPUT_HEIGHT, MODEL_INPUT_WIDTH,
-                                  MODEL_INPUT_DEPTH])
-  if flip_left_right:
-    flipped_image = tf.image.random_flip_left_right(cropped_image)
-  else:
-    flipped_image = cropped_image
-  brightness_min = 1.0 - (random_brightness / 100.0)
-  brightness_max = 1.0 + (random_brightness / 100.0)
-  brightness_value = tf.random_uniform(tensor_shape.scalar(),
-                                       minval=brightness_min,
-                                       maxval=brightness_max)
-  brightened_image = tf.multiply(flipped_image, brightness_value)
-  distort_result = tf.expand_dims(brightened_image, 0, name='DistortResult')
-  return jpeg_data, distort_result
+    jpeg_data = tf.placeholder(tf.string, name='DistortJPGInput')
+    decoded_image = tf.image.decode_jpeg(jpeg_data, channels=MODEL_INPUT_DEPTH)
+    decoded_image_as_float = tf.cast(decoded_image, dtype=tf.float32)
+    decoded_image_4d = tf.expand_dims(decoded_image_as_float, 0)
+    margin_scale = 1.0 + (random_crop / 100.0)
+    resize_scale = 1.0 + (random_scale / 100.0)
+    margin_scale_value = tf.constant(margin_scale)
+    resize_scale_value = tf.random_uniform(tensor_shape.scalar(),
+                                           minval=1.0,
+                                           maxval=resize_scale)
+    scale_value = tf.multiply(margin_scale_value, resize_scale_value)
+    precrop_width = tf.multiply(scale_value, MODEL_INPUT_WIDTH)
+    precrop_height = tf.multiply(scale_value, MODEL_INPUT_HEIGHT)
+    precrop_shape = tf.stack([precrop_height, precrop_width])
+    precrop_shape_as_int = tf.cast(precrop_shape, dtype=tf.int32)
+    precropped_image = tf.image.resize_bilinear(decoded_image_4d,
+                                                precrop_shape_as_int)
+    precropped_image_3d = tf.squeeze(precropped_image, squeeze_dims=[0])
+    cropped_image = tf.random_crop(precropped_image_3d,
+                                   [MODEL_INPUT_HEIGHT, MODEL_INPUT_WIDTH,
+                                    MODEL_INPUT_DEPTH])
+    if flip_left_right:
+        flipped_image = tf.image.random_flip_left_right(cropped_image)
+    else:
+        flipped_image = cropped_image
+    brightness_min = 1.0 - (random_brightness / 100.0)
+    brightness_max = 1.0 + (random_brightness / 100.0)
+    brightness_value = tf.random_uniform(tensor_shape.scalar(),
+                                         minval=brightness_min,
+                                         maxval=brightness_max)
+    brightened_image = tf.multiply(flipped_image, brightness_value)
+    distort_result = tf.expand_dims(brightened_image, 0, name='DistortResult')
+    return jpeg_data, distort_result
 
 
 def variable_summaries(var):
-  """Attach a lot of summaries to a Tensor (for TensorBoard visualization)."""
+    """Attach a lot of summaries to a Tensor (for TensorBoard visualization)."""
     with tf.name_scope('summaries'):
         mean = tf.reduce_mean(var)
         tf.summary.scalar('mean', mean)
-            with tf.name_scope('stddev'):
-                stddev = tf.sqrt(tf.reduce_mean(tf.square(var - mean)))
-            tf.summary.scalar('stddev', stddev)
-            tf.summary.scalar('max', tf.reduce_max(var))
-            tf.summary.scalar('min', tf.reduce_min(var))
-            tf.summary.histogram('histogram', var)
+        with tf.name_scope('stddev'):
+            stddev = tf.sqrt(tf.reduce_mean(tf.square(var - mean)))
+        tf.summary.scalar('stddev', stddev)
+        tf.summary.scalar('max', tf.reduce_max(var))
+        tf.summary.scalar('min', tf.reduce_min(var))
+        tf.summary.histogram('histogram', var)
 
-def add_final_training_op(bottleneck_tensor):
+def add_final_training_op(final_tensor_name, bottleneck_tensor):
 
-    obtl_shape = bottleneck_tensor.shape.as_list()
+    btl_shape = bottleneck_tensor.shape.as_list()
 
     n = btl_shape[1]
     m = btl_shape[2]
@@ -422,7 +422,7 @@ def add_final_training_op(bottleneck_tensor):
                 bottleneck_tensor, shape=[None] + btl_shape[1:],
                 name='BottleneckInputPlaceholder')
         ground_truth_input = tf.placeholder(tf.float32,
-                [None] + btl.shape[1:3], NUM_CLASSES+ 5 * NUM_BOXES,
+                [None, n, m, OUTPUT_DIMS],
                 name='GroundTruthInput')
     layer_name = 'final_training_ops'
     with tf.name_scope(layer_name):
@@ -477,9 +477,9 @@ def add_final_training_ops(final_tensor_name, bottleneck_tensors):
     ground_truth_inputs = []
     final_tensors = []
 
-    for bottleneck_tensor in bottleneck_tensors:
-        with tf.name_scape('btl_' + bottleneck_tensor.name):
-            loss, cross_entropy_mean, bottleneck_input, ground_truth_input, final_tensor = add_final_training_op(bottleneck_tensor)
+    for i, bottleneck_tensor in enumerate(bottleneck_tensors):
+        with tf.name_scope('btl_%d' % i):
+            loss, cross_entropy_mean, bottleneck_input, ground_truth_input, final_tensor = add_final_training_op(final_tensor_name, bottleneck_tensor)
             net_loss += loss
             net_cross_entropy_mean += cross_entropy_mean
             bottleneck_inputs.append(bottleneck_input)
@@ -504,6 +504,38 @@ def add_evaluation_step(final_tensor, ground_truth_tensor):
   Returns:
     Tuple of (evaluation step, prediction).
   """
+  with tf.name_scope('accuracy'):
+    with tf.name_scope('correct_prediction'):
+      # currently editing evaluation step
+      g_clf, g_bnd = tf.split(ground_truth_tensor, [21,4], 3) # ground truth
+      n_clf = final_tensor #tf.split(result_tensor, [21,4], 3) # network output
+
+      prediction = tf.greater(n_clf, 0.5)
+      ground_truth_prediction = tf.greater(g_clf, 0.5)
+      correct_prediction = tf.cast(tf.equal(prediction, ground_truth_prediction), tf.float32)
+      accuracy = tf.reduce_mean(correct_prediction)
+  tf.summary.scalar('accuracy', accuracy)
+  return prediction, accuracy 
+
+def add_evaluation_steps(final_tensors, ground_truth_tensors):
+  """Inserts the operations we need to evaluate the accuracy of our results.
+
+  Args:
+    result_tensor: The new final node that produces results.
+    ground_truth_tensor: The node we feed ground truth data
+    into.
+
+  Returns:
+    Tuple of (evaluation step, prediction).
+  """
+  predictions = []
+  accuracies = []
+  for final_tensor, ground_truth_tensor in zip(final_tensors, ground_truth_tensors):
+      prediction, accuracy = add_evaluation_step(final_tensor, ground_truth_tensor)
+      predictions.append(prediction)
+      accuracies.append(accuracy)
+  return tf.reduce_mean(accuracy)
+
   with tf.name_scope('accuracy'):
     with tf.name_scope('correct_prediction'):
       # currently editing evaluation step
@@ -547,12 +579,11 @@ def main(_):
 
     # Add the new layer that we'll be training.
     (train_step, cross_entropy, bottleneck_inputs, ground_truth_inputs,
-     final_tensors) = add_final_training_ops(len(image_lists.keys()),
-                                            FLAGS.final_tensor_name)
+     final_tensors) = add_final_training_ops(FLAGS.final_tensor_name, bottleneck_tensors)
 
     # Create the operations we need to evaluate the accuracy of our new layer.
-    prediction, evaluation_step = add_evaluation_step(
-        final_tensor, ground_truth_input)
+    prediction, evaluation_step = add_evaluation_steps(
+        final_tensors, ground_truth_inputs)
 
     # Merge all the summaries and write them out to the summaries_dir
     merged = tf.summary.merge_all()
@@ -579,17 +610,17 @@ def main(_):
              FLAGS.image_dir, distorted_jpeg_data_tensor,
              distorted_image_tensor, resized_image_tensor, bottleneck_tensor)
       else:
-        (train_bottlenecks,
-         train_ground_truth, _) = get_random_cached_bottlenecks(
+        (train_bottlenecks, train_ground_truths, _) = get_random_cached_bottlenecks(
              sess, image_lists, FLAGS.train_batch_size, 'training',
-             jpeg_data_tensor, bottleneck_tensor)
+             jpeg_data_tensor)
       # Feed the bottlenecks and ground truth into the graph, and run a training
       # step. Capture training summaries for TensorBoard with the `merged` op.
 
       train_summary, _ = sess.run(
           [merged, train_step],
-          feed_dict={bottleneck_input: train_bottlenecks,
-                     ground_truth_input: train_ground_truth})
+          feed_dict={bottleneck_tensors: train_bottlenecks,
+                     ground_truth_inputs: train_ground_truths}) # if this doesn't work, manually construct feed_dict
+
       train_writer.add_summary(train_summary, i)
 
       # Every so often, print out how well the graph is training.
