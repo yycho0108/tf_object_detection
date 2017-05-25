@@ -11,3 +11,4 @@ python voc_retrain.py \
 	--how_many_training_steps=12000 \
 	--test_batch_size=100 \
 	--checkpoint_path=workspace/checkpoint/model.ckpt \
+	--load=false

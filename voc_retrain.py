@@ -99,7 +99,9 @@ slim = tf.contrib.slim
 
 from config import *
 
-from freeze_graph import freeze_graph
+import signal
+
+#from freeze_graph import freeze_graph
 
 FLAGS = None
 
@@ -549,7 +551,7 @@ def decode_box(bnds):
         h = dh * w * h_r
 
         res.append(tf.stack([iou, x, y, w, h], axis=3, name='decode_bbox'))
-    return tf.stack(res, axis=3, name='stack_box')
+    return tf.concat(res, axis=3, name='stack_box')
 
 
 def add_evaluation_step(n_clf, n_bnd, ground_truth_tensor):
@@ -590,7 +592,8 @@ def add_evaluation_step(n_clf, n_bnd, ground_truth_tensor):
             #n_bbox_locs = n_bbox_indices
 
             accuracy = tf.reduce_mean(tf.cast(tf.gather_nd( tf.equal(g_clf_pred, n_clf_pred), g_clf_indices),  tf.float32)) # just classification accuracy
-            pred = tf.gather_nd(decode_box(n_bnd), n_bbox_indices)
+            n_box = decode_box(n_bnd)
+            pred = tf.gather_nd(n_box, n_bbox_indices)
 
             #box_pred = tf.gather_nd(n_bbox_indices,n_bnd) 
 
@@ -628,7 +631,7 @@ def add_evaluation_steps(n_clfs, n_bnds, ground_truth_tensors):
   accuracy = tf.reduce_mean(accuracies)
   
   tf.summary.scalar('accuracy', accuracy)
-  return predictions, tf.reduce_mean(accuracy)
+  return tf.reshape(tf.concat(predictions, axis=1),[-1,5], name=FLAGS.final_tensor_name), tf.reduce_mean(accuracy)
 
 
 def create_feed_dict(ground_truth_inputs, ground_truths, bottleneck_inputs, bottlenecks):
@@ -638,7 +641,17 @@ def create_feed_dict(ground_truth_inputs, ground_truths, bottleneck_inputs, bott
     for bt, vbt in zip(bottleneck_inputs, bottlenecks):
         feed_dict[bt] = vbt
     return feed_dict
+
+stop_request = False
+def sigint_handler(signal, frame):
+    global stop_request
+    stop_request = True
+
 def main(_):
+  global stop_request
+  signal.signal(signal.SIGINT, sigint_handler)
+
+
   # Setup the directory we'll write summaries to for TensorBoard
   if tf.gfile.Exists(FLAGS.summaries_dir):
     tf.gfile.DeleteRecursively(FLAGS.summaries_dir)
@@ -753,20 +766,23 @@ def main(_):
         print("Loading from : %s" % FLAGS.checkpoint_path)
         saver.restore(sess, FLAGS.checkpoint_path)
 
-    #while True:
-    #    for i in range(now, now + n):
-    #        train(i)
-    #        if i>0 and (i % 1000) == 0:
-    #            saver.save(sess, FLAGS.checkpoint_path)
-    #            print("Model saved in : %s" % FLAGS.checkpoint_path)
-    #    now += n
-    #    s = raw_input('Enter Number of Episodes to Continue : \n')
-    #    n = 0
+    while True:
+        for i in range(now, now + n):
+            if stop_request:
+                stop_request = False
+                break
+            train(i)
+            if i>0 and (i % 1000) == 0:
+                saver.save(sess, FLAGS.checkpoint_path)
+                print("Model saved in : %s" % FLAGS.checkpoint_path)
+        now += n
+        s = raw_input('Enter Number of Episodes to Continue : \n')
+        n = 0
 
-    #    try:
-    #        n = int(s)
-    #    except Exception as e:
-    #        break
+        try:
+            n = int(s)
+        except Exception as e:
+            break
       
     # We've completed all our training, so run a final test evaluation on
     # some new images we haven't used before.
@@ -779,15 +795,13 @@ def main(_):
             ground_truth_inputs, test_ground_truths,
             bottleneck_inputs, test_bottlenecks)
 
-    l = sess.run(
-        [evaluation_step] + predictions, feed_dict = test_feed_dict)
-
-    test_accuracy, test_predictions = l[0], l[1:]
+    test_accuracy, test_predictions = sess.run(
+        [evaluation_step, predictions], feed_dict = test_feed_dict)
 
     print('Final test accuracy = %.1f%% (N=%d)' % (
         test_accuracy * 100, len(test_bottlenecks)))
 
-    print(test_predictions)
+    #print(test_predictions)
 
     #if FLAGS.print_misclassified_test_images:
     #    print('=== MISCLASSIFIED TEST IMAGES ===')
@@ -800,20 +814,19 @@ def main(_):
     # constants.
 
     print('Start Saving ... ')
-    tf.train.write_graph(graph.as_graph_def(), '', FLAGS.output_graph)  # graph def
-    saver.save(sess, FLAGS.checkpoint_path) # weights
-    output_node_names = ([n.name for n in graph.as_graph_def().node if ('decode_bbox' in n.name)])
-    freeze_graph(FLAGS.output_graph, '', False, FLAGS.checkpoint_path, output_node_names, 'ssd_save/restore', 'ssd_save/Const:0', FLAGS.output_graph, True,'','')
+    #tf.train.write_graph(graph.as_graph_def(), '', FLAGS.output_graph)  # graph def
+    #saver.save(sess, FLAGS.checkpoint_path) # weights
+    #freeze_graph(FLAGS.output_graph, '', False, FLAGS.checkpoint_path, output_node_names, 'ssd_save/restore', 'ssd_save/Const:0', FLAGS.output_graph, True,'','')
 
     #for n in output_nodes:
     #    print(n.name)
 
-    #output_graph_def = graph_util.convert_variables_to_constants(
-    #    sess, graph.as_graph_def(), predictions)
-    #with gfile.FastGFile(FLAGS.output_graph, 'wb') as f:
-    #  f.write(output_graph_def.SerializeToString())
-    #with gfile.FastGFile(FLAGS.output_labels, 'w') as f:
-    #  f.write('\n'.join(image_lists.keys()) + '\n')
+    output_graph_def = graph_util.convert_variables_to_constants(
+        sess, graph.as_graph_def(), [FLAGS.final_tensor_name])
+    with gfile.FastGFile(FLAGS.output_graph, 'wb') as f:
+      f.write(output_graph_def.SerializeToString())
+    with gfile.FastGFile(FLAGS.output_labels, 'w') as f:
+      f.write('\n'.join(image_lists.keys()) + '\n')
 
 def str2bool(v):
     if v.lower() in ('yes', 'true', 't', 'y', '1'):
