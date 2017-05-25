@@ -95,9 +95,11 @@ from tensorflow.python.framework import tensor_shape
 from tensorflow.python.platform import gfile
 from tensorflow.python.util import compat
 
-from ast import literal_eval as make_tuple
+slim = tf.contrib.slim
 
 from config import *
+
+from freeze_graph import freeze_graph
 
 FLAGS = None
 
@@ -178,7 +180,7 @@ def create_inception_graph():
             #print('bttt', bottleneck_tensors) # ===> list
 
             ## ADD A POOL ...
-            for i, k in enumerate(APPEND_POOL):
+            for i in range(len(APPEND_POOL)):
                 name = ('aux_pool_%d' % i)
                 p = tf.nn.max_pool(bottleneck_tensors[-1],ksize=[1,2,2,1], strides=[1,2,2,1], padding='SAME', name=name)
                 bottleneck_tensors.append(p)
@@ -186,7 +188,7 @@ def create_inception_graph():
             jpeg_data_tensor = results[-2]
             resized_input_tensor = results[-1]
                     
-    report_graph(graph)
+    #report_graph(graph)
     return graph, bottleneck_tensors, jpeg_data_tensor, resized_input_tensor
 
 def get_bottleneck(sess, name, jpeg_data_tensor):
@@ -526,8 +528,31 @@ def add_final_training_ops(bottleneck_tensors):
 
     return (train_step, net_cross_entropy_mean, bottleneck_inputs, ground_truth_inputs, n_clfs, n_bnds)
 
+def decode_box(bnds):
+    s_bnds = tf.split(bnds, NUM_BOXES, axis=3)
+    res = []
+    for i, bnd in enumerate(s_bnds):
+        w_r, h_r = BBOX_RATIOS[i]
+        n,m = bnd.shape.as_list()[1:3]
+        iou, dx, dy, dw, dh = tf.unstack(bnd, axis=3)
+        # convert to (iou, x, y, w, h)
+        h, w = 299./n, 299./m # TODO : Warning : Hard Coded!
 
-def add_evaluation_step(n_clf, n_bnd, ground_truth_tensor, idx):
+        i_, j_ = np.mgrid[0:n,0:m].astype(np.float32)
+        i_ *= h # center positions
+        i_ += (h/2.)
+        j_ *= w
+        j_ += (w/2.)
+        x = dx * w + j_
+        y = dy * h + i_
+        w = dw * w * w_r
+        h = dh * w * h_r
+
+        res.append(tf.stack([iou, x, y, w, h], axis=3, name='decode_bbox'))
+    return tf.stack(res, axis=3, name='stack_box')
+
+
+def add_evaluation_step(n_clf, n_bnd, ground_truth_tensor):
     """Inserts the operations we need to evaluate the accuracy of our results.
 
     Args:
@@ -543,6 +568,7 @@ def add_evaluation_step(n_clf, n_bnd, ground_truth_tensor, idx):
             #w_r,h_r = BBOX_RATIOS[idx]
 
             g_clf, g_bnd = tf.split(ground_truth_tensor, [NUM_CLASSES,5*NUM_BOXES], 3) # ground truth
+
             #n_clf, n_bnd = tf.split(final_tensor, [NUM_CLASSES,5*NUM_BOXES], 3) # ground truth
 
             #[batch,grid_i,grid_j,classes]
@@ -554,12 +580,17 @@ def add_evaluation_step(n_clf, n_bnd, ground_truth_tensor, idx):
             #g_bbox_indices = tf.where(tf.not_equal(tf.logical_and(g_clf_mask, g_iou_mask), 0))
 
             n_clf_pred = tf.argmax(n_clf,axis=3) # class-prediction
-            #n_clf_val = tf.reduce_max(n_clf, axis=3)
-            #n_clf_mask = tf.greater(n_clf_val, 0.5) # = where object was identified
-            #n_iou_mask = tf.greater(n_bnd[:,:,:,0], 0.2) # = where bbox was identified 
-            #n_bbox_indices = tf.where(tf.not_equal(tf.logical_and(n_clf_mask, n_iou_mask), 0))
+            n_clf_val = tf.reduce_max(n_clf, axis=3)
+            n_clf_mask = tf.greater(n_clf_val, 0.5) # = where object was identified
+            n_iou_mask = tf.greater(n_bnd[:,:,:,0], 0.2) # = where bbox was identified 
+
+            n_bbox_indices = tf.where(tf.logical_and(n_clf_mask, n_iou_mask)) # "valid" bboxes
+
+            #for (i, bbox_indices) in enumerate(tf.split(n_bbox_indices, NUM_BOXES, 2)):
+            #n_bbox_locs = n_bbox_indices
 
             accuracy = tf.reduce_mean(tf.cast(tf.gather_nd( tf.equal(g_clf_pred, n_clf_pred), g_clf_indices),  tf.float32)) # just classification accuracy
+            pred = tf.gather_nd(decode_box(n_bnd), n_bbox_indices)
 
             #box_pred = tf.gather_nd(n_bbox_indices,n_bnd) 
 
@@ -568,7 +599,7 @@ def add_evaluation_step(n_clf, n_bnd, ground_truth_tensor, idx):
             #correct_prediction = tf.cast(tf.equal(prediction, ground_truth_prediction), tf.float32)
             #accuracy = tf.reduce_mean(correct_prediction)
 
-    return accuracy #bbox, accuracy 
+    return pred, accuracy #bbox, accuracy 
 
 def add_evaluation_steps(n_clfs, n_bnds, ground_truth_tensors):
   """Inserts the operations we need to evaluate the accuracy of our results.
@@ -581,24 +612,32 @@ def add_evaluation_steps(n_clfs, n_bnds, ground_truth_tensors):
   Returns:
     Tuple of (evaluation step, prediction).
   """
-  #predictions = []
+  predictions = []
   accuracies = []
   i = 0
   n = len(n_clfs)
-  for i in range(n):
+  for i in range(n): # iterate over different conv-layer classifiers
       with tf.name_scope('eval_%d' % i):
           gt = ground_truth_tensors[i]
-          accuracy = add_evaluation_step(n_clfs[i], n_bnds[i], gt, i)
+          prediction, accuracy = add_evaluation_step(n_clfs[i], n_bnds[i], gt)
           #prediction, accuracy = add_evaluation_step(ft, gt)
           #predictions.append(prediction)
           accuracies.append(accuracy)
+          predictions.append(prediction)
       i += 1
   accuracy = tf.reduce_mean(accuracies)
   
   tf.summary.scalar('accuracy', accuracy)
-  return tf.reduce_mean(accuracy)
+  return predictions, tf.reduce_mean(accuracy)
 
 
+def create_feed_dict(ground_truth_inputs, ground_truths, bottleneck_inputs, bottlenecks):
+    feed_dict = {}
+    for gt, vgt in zip(ground_truth_inputs, ground_truths):
+        feed_dict[gt] = vgt
+    for bt, vbt in zip(bottleneck_inputs, bottlenecks):
+        feed_dict[bt] = vbt
+    return feed_dict
 def main(_):
   # Setup the directory we'll write summaries to for TensorBoard
   if tf.gfile.Exists(FLAGS.summaries_dir):
@@ -632,7 +671,7 @@ def main(_):
     (train_step, cross_entropy, bottleneck_inputs, ground_truth_inputs, n_clfs, n_bnds) = add_final_training_ops(bottleneck_tensors)
 
     # Create the operations we need to evaluate the accuracy of our new layer.
-    evaluation_step = add_evaluation_steps(n_clfs, n_bnds, ground_truth_inputs)
+    predictions, evaluation_step = add_evaluation_steps(n_clfs, n_bnds, ground_truth_inputs)
 
     # Merge all the summaries and write them out to the summaries_dir
     merged = tf.summary.merge_all()
@@ -691,11 +730,9 @@ def main(_):
                     sess, image_lists, FLAGS.validation_batch_size, 'validation',
                     jpeg_data_tensor))
 
-            valid_feed_dict = {}
-            for gt, vgt in zip(ground_truth_inputs, valid_ground_truths):
-                valid_feed_dict[gt] = vgt
-            for bt, vbt in zip(bottleneck_inputs, valid_bottlenecks):
-                valid_feed_dict[bt] = vbt
+            valid_feed_dict =  create_feed_dict(
+                    ground_truth_inputs, valid_ground_truths,
+                    bottleneck_inputs, valid_bottlenecks)
 
             # Run a validation step and capture training summaries for TensorBoard
             # with the `merged` op.
@@ -710,46 +747,81 @@ def main(_):
     n = FLAGS.how_many_training_steps
     now = 0
 
-    while True:
-        for i in range(now, now + n):
-            train(i)
-        now += n
-        s = raw_input('Enter Number of Episodes to Continue : \n')
-        n = 0
-        try:
-            n = int(s)
-        except Exception as e:
-            break
+    saver = tf.train.Saver()
+
+    if FLAGS.load:
+        print("Loading from : %s" % FLAGS.checkpoint_path)
+        saver.restore(sess, FLAGS.checkpoint_path)
+
+    #while True:
+    #    for i in range(now, now + n):
+    #        train(i)
+    #        if i>0 and (i % 1000) == 0:
+    #            saver.save(sess, FLAGS.checkpoint_path)
+    #            print("Model saved in : %s" % FLAGS.checkpoint_path)
+    #    now += n
+    #    s = raw_input('Enter Number of Episodes to Continue : \n')
+    #    n = 0
+
+    #    try:
+    #        n = int(s)
+    #    except Exception as e:
+    #        break
       
     # We've completed all our training, so run a final test evaluation on
     # some new images we haven't used before.
 
-    #test_bottlenecks, test_ground_truth, test_filenames = (
-    #    get_random_cached_bottlenecks(sess, image_lists, FLAGS.test_batch_size,
-    #                                  'testing', jpeg_data_tensor, bottleneck_tensor))
-    #test_accuracy, predictions = sess.run(
-    #    [evaluation_step, prediction],
-    #    feed_dict={bottleneck_input: test_bottlenecks,
-    #               ground_truth_input: test_ground_truth})
-    #print('Final test accuracy = %.1f%% (N=%d)' % (
-    #    test_accuracy * 100, len(test_bottlenecks)))
+    test_bottlenecks, test_ground_truths, test_filenames = (
+        get_random_cached_bottlenecks(sess, image_lists, FLAGS.test_batch_size,
+                                      'testing', jpeg_data_tensor))
+
+    test_feed_dict =  create_feed_dict(
+            ground_truth_inputs, test_ground_truths,
+            bottleneck_inputs, test_bottlenecks)
+
+    l = sess.run(
+        [evaluation_step] + predictions, feed_dict = test_feed_dict)
+
+    test_accuracy, test_predictions = l[0], l[1:]
+
+    print('Final test accuracy = %.1f%% (N=%d)' % (
+        test_accuracy * 100, len(test_bottlenecks)))
+
+    print(test_predictions)
 
     #if FLAGS.print_misclassified_test_images:
-    #  print('=== MISCLASSIFIED TEST IMAGES ===')
-    #  for i, test_filename in enumerate(test_filenames):
-    #    if predictions[i] != test_ground_truth[i].argmax():
-    #      print('%70s  %s' % (test_filename,
+    #    print('=== MISCLASSIFIED TEST IMAGES ===')
+    #    for i, test_filename in enumerate(test_filenames):
+    #      if predictions[i] != test_ground_truth[i].argmax():
+    #        print('%70s  %s' % (test_filename,
     #                          list(image_lists.keys())[predictions[i]]))
 
     # Write out the trained graph and labels with the weights stored as
     # constants.
-    output_graph_def = graph_util.convert_variables_to_constants(
-        sess, graph.as_graph_def(), [FLAGS.final_tensor_name])
-    with gfile.FastGFile(FLAGS.output_graph, 'wb') as f:
-      f.write(output_graph_def.SerializeToString())
-    with gfile.FastGFile(FLAGS.output_labels, 'w') as f:
-      f.write('\n'.join(image_lists.keys()) + '\n')
 
+    print('Start Saving ... ')
+    tf.train.write_graph(graph.as_graph_def(), '', FLAGS.output_graph)  # graph def
+    saver.save(sess, FLAGS.checkpoint_path) # weights
+    output_node_names = ([n.name for n in graph.as_graph_def().node if ('decode_bbox' in n.name)])
+    freeze_graph(FLAGS.output_graph, '', False, FLAGS.checkpoint_path, output_node_names, 'ssd_save/restore', 'ssd_save/Const:0', FLAGS.output_graph, True,'','')
+
+    #for n in output_nodes:
+    #    print(n.name)
+
+    #output_graph_def = graph_util.convert_variables_to_constants(
+    #    sess, graph.as_graph_def(), predictions)
+    #with gfile.FastGFile(FLAGS.output_graph, 'wb') as f:
+    #  f.write(output_graph_def.SerializeToString())
+    #with gfile.FastGFile(FLAGS.output_labels, 'w') as f:
+    #  f.write('\n'.join(image_lists.keys()) + '\n')
+
+def str2bool(v):
+    if v.lower() in ('yes', 'true', 't', 'y', '1'):
+        return True
+    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
+        return False
+    else:
+        raise argparse.ArgumentTypeError('Boolean value expected.')
 
 if __name__ == '__main__':
   parser = argparse.ArgumentParser()
@@ -904,5 +976,21 @@ if __name__ == '__main__':
       input pixels up or down by.\
       """
   )
+  parser.add_argument(
+          '--checkpoint_path',
+          type=str,
+          default='/tmp/model.ckpt',
+          help="Path To Save Model"
+          )
+
+  parser.add_argument(
+          '--load',
+          type=str2bool,
+          nargs='?',
+          const=True,
+          default='n',
+          help='Load Model From CheckPoint'
+          )
+
   FLAGS, unparsed = parser.parse_known_args()
   tf.app.run(main=main, argv=[sys.argv[0]] + unparsed)
