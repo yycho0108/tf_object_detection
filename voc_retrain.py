@@ -525,13 +525,15 @@ def add_final_training_ops(bottleneck_tensors):
 
     with tf.name_scope('train'):
         ## TODO : replace optimizer?
-        optimizer = tf.train.GradientDescentOptimizer(FLAGS.learning_rate)
+        #optimizer = tf.train.GradientDescentOptimizer(FLAGS.learning_rate)
+        optimizer = tf.train.AdamOptimizer(learning_rate = FLAGS.learning_rate)
         train_step = optimizer.minimize(net_loss)
 
     return (train_step, net_cross_entropy_mean, bottleneck_inputs, ground_truth_inputs, n_clfs, n_bnds)
 
 def decode_box(bnds):
     s_bnds = tf.split(bnds, NUM_BOXES, axis=3)
+
     res = []
     for i, bnd in enumerate(s_bnds):
         w_r, h_r = BBOX_RATIOS[i]
@@ -550,7 +552,7 @@ def decode_box(bnds):
         w = dw * w * w_r
         h = dh * w * h_r
 
-        res.append(tf.stack([iou, x, y, w, h], axis=3, name='decode_bbox'))
+        res.append(tf.stack([iou, x, y, w, h], axis=3, name='decode_bbox')) # each iou has an associated prediction
     return tf.concat(res, axis=3, name='stack_box')
 
 
@@ -593,7 +595,9 @@ def add_evaluation_step(n_clf, n_bnd, ground_truth_tensor):
 
             accuracy = tf.reduce_mean(tf.cast(tf.gather_nd( tf.equal(g_clf_pred, n_clf_pred), g_clf_indices),  tf.float32)) # just classification accuracy
             n_box = decode_box(n_bnd)
-            pred = tf.gather_nd(n_box, n_bbox_indices)
+
+            box_with_clf = tf.concat([n_box, tf.cast(tf.expand_dims(n_clf_pred, -1),tf.float32)], axis=3) # 5xNUM_BOXES+1
+            pred = tf.gather_nd(box_with_clf, n_bbox_indices)
 
             #box_pred = tf.gather_nd(n_bbox_indices,n_bnd) 
 
@@ -631,7 +635,9 @@ def add_evaluation_steps(n_clfs, n_bnds, ground_truth_tensors):
   accuracy = tf.reduce_mean(accuracies)
   
   tf.summary.scalar('accuracy', accuracy)
-  return tf.reshape(tf.concat(predictions, axis=1),[-1,5], name=FLAGS.final_tensor_name), tf.reduce_mean(accuracy)
+  pred = tf.concat(predictions, axis=0, name=FLAGS.final_tensor_name)
+  print('ps', pred.shape)
+  return pred, tf.reduce_mean(accuracy)
 
 
 def create_feed_dict(ground_truth_inputs, ground_truths, bottleneck_inputs, bottlenecks):
@@ -646,6 +652,14 @@ stop_request = False
 def sigint_handler(signal, frame):
     global stop_request
     stop_request = True
+
+def create_graph(graph_path):
+    """Creates a graph from saved GraphDef file and returns a saver."""
+    # Creates graph from saved graph_def.pb.
+    with tf.gfile.FastGFile(graph_path, 'rb') as f:
+        graph_def = tf.GraphDef()
+        graph_def.ParseFromString(f.read())
+        _ = tf.import_graph_def(graph_def, name='')
 
 def main(_):
   global stop_request
@@ -671,7 +685,9 @@ def main(_):
       FLAGS.flip_left_right, FLAGS.random_crop, FLAGS.random_scale,
       FLAGS.random_brightness)
 
-  with tf.Session(graph=graph) as sess:
+  config = tf.ConfigProto()
+  config.gpu_options.allow_growth=True
+  with tf.Session(graph=graph, config=config) as sess:
 
     if do_distort_images:
       # We will be applying distortions, so setup the operations we'll need.
@@ -763,8 +779,12 @@ def main(_):
     saver = tf.train.Saver()
 
     if FLAGS.load:
-        print("Loading from : %s" % FLAGS.checkpoint_path)
-        saver.restore(sess, FLAGS.checkpoint_path)
+        if len(FLAGS.checkpoint_path) > 0:
+            print("Loading from : %s" % FLAGS.checkpoint_path)
+            saver.restore(sess, FLAGS.checkpoint_path)
+        else:
+            create_graph(FLAGS.input_graph)
+
 
     while True:
         for i in range(now, now + n):
@@ -783,7 +803,8 @@ def main(_):
             n = int(s)
         except Exception as e:
             break
-      
+
+    print('completed training !')
     # We've completed all our training, so run a final test evaluation on
     # some new images we haven't used before.
 
@@ -791,12 +812,15 @@ def main(_):
         get_random_cached_bottlenecks(sess, image_lists, FLAGS.test_batch_size,
                                       'testing', jpeg_data_tensor))
 
+    print('create feed dict')
     test_feed_dict =  create_feed_dict(
             ground_truth_inputs, test_ground_truths,
             bottleneck_inputs, test_bottlenecks)
 
+    print('Run Tests')
     test_accuracy, test_predictions = sess.run(
         [evaluation_step, predictions], feed_dict = test_feed_dict)
+
 
     print('Final test accuracy = %.1f%% (N=%d)' % (
         test_accuracy * 100, len(test_bottlenecks)))
@@ -1003,6 +1027,12 @@ if __name__ == '__main__':
           const=True,
           default='n',
           help='Load Model From CheckPoint'
+          )
+  parser.add_argument(
+          '--input_graph',
+          type=str,
+          default='',
+          help="Input Graph (*.pb) to load from"
           )
 
   FLAGS, unparsed = parser.parse_known_args()
