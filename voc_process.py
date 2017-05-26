@@ -287,7 +287,7 @@ def visualize():
                 bboxes = label[i,j,num_classes:].reshape(-1,5)
                 for box_idx, bbox in enumerate(bboxes):
                     iou_i, dx, dy, dw, dh = bbox
-                    if iou_i < 0.3: # localization confidence
+                    if iou_i < 0.2: # localization confidence
                         continue
                     b_x = w_box * (j+0.5)
                     b_y = h_box * (i+0.5)
@@ -323,8 +323,8 @@ def visualize():
         label_frames.append(label_frame)
 
     cv2.imshow('frame', frame)
-    for i, label_frame in enumerate(label_frames):
-        cv2.imshow(('label_%d' % i), label_frame)
+    #for i, label_frame in enumerate(label_frames):
+    #    cv2.imshow(('label_%d' % i), label_frame)
     if cv2.waitKey(0) == 27:
         return
 
