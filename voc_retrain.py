@@ -596,7 +596,7 @@ def add_evaluation_step(n_clf, n_bnd, ground_truth_tensor):
             accuracy = tf.reduce_mean(tf.cast(tf.gather_nd( tf.equal(g_clf_pred, n_clf_pred), g_clf_indices),  tf.float32)) # just classification accuracy
             n_box = decode_box(n_bnd)
 
-            box_with_clf = tf.concat([n_box, tf.cast(tf.expand_dims(n_clf_pred, -1),tf.float32)], axis=3) # 5xNUM_BOXES+1
+            box_with_clf = tf.concat([n_box, tf.cast(tf.expand_dims(n_clf_pred, -1),tf.float32), tf.expand_dims(n_clf_val, -1)], axis=3) # 5xNUM_BOXES+1
             pred = tf.gather_nd(box_with_clf, n_bbox_indices)
 
             #box_pred = tf.gather_nd(n_bbox_indices,n_bnd) 
@@ -660,6 +660,14 @@ def create_graph(graph_path):
         graph_def = tf.GraphDef()
         graph_def.ParseFromString(f.read())
         _ = tf.import_graph_def(graph_def, name='')
+
+#def save_graph(sess, graph):
+#    output_graph_def = graph_util.convert_variables_to_constants(
+#        sess, graph.as_graph_def(), [FLAGS.final_tensor_name])
+#    with gfile.FastGFile(FLAGS.output_graph, 'wb') as f:
+#      f.write(output_graph_def.SerializeToString())
+#    with gfile.FastGFile(FLAGS.output_labels, 'w') as f:
+#      f.write('\n'.join(image_lists.keys()) + '\n')
 
 def main(_):
   global stop_request
@@ -782,9 +790,6 @@ def main(_):
         if len(FLAGS.checkpoint_path) > 0:
             print("Loading from : %s" % FLAGS.checkpoint_path)
             saver.restore(sess, FLAGS.checkpoint_path)
-        else:
-            create_graph(FLAGS.input_graph)
-
 
     while True:
         for i in range(now, now + n):
@@ -796,6 +801,16 @@ def main(_):
                 saver.save(sess, FLAGS.checkpoint_path)
                 print("Model saved in : %s" % FLAGS.checkpoint_path)
         now += n
+
+        s = raw_input('Save Now? \n')
+        try:
+            do_save = str2bool(s)
+            if do_save:
+                saver.save(sess, FLAGS.checkpoint_path)
+        except Exception as e:
+            print(e)
+            pass
+
         s = raw_input('Enter Number of Episodes to Continue : \n')
         n = 0
 
@@ -1027,12 +1042,6 @@ if __name__ == '__main__':
           const=True,
           default='n',
           help='Load Model From CheckPoint'
-          )
-  parser.add_argument(
-          '--input_graph',
-          type=str,
-          default='',
-          help="Input Graph (*.pb) to load from"
           )
 
   FLAGS, unparsed = parser.parse_known_args()

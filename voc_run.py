@@ -70,28 +70,42 @@ def run_inference_on_image():
 
             final_result  = sess.run(final_tensor,
                                    {'DecodeJpeg/contents:0': image_data})
-
             frame = cv2.imread(f)
+            label_frame = frame.copy()
             im_h,im_w,_ = frame.shape
 
+            rects = []
+            preds = []
+
+            IOU_THRESH = 0.3
+            CONF_THRESH = 0.5
             for clf in final_result:
                 if len(clf) <= 0:
                     continue
-                boxes = np.split(clf[:-1], 5)
-                pred = int(round(clf[-1]))
-                print categories[pred]
+
+                boxes = np.split(clf[:-2], 5)
+                pred = int(round(clf[-2]))
+                conf = clf[-1]
+
                 color = colors[pred]
-                print color
                 for box in boxes:
                     iou,x,y,w,h = box
                     x,w = x * (im_w/299.), w * (im_w/299.)
                     y,h = y * (im_h/299.), h * (im_h/299.)
-                    x = int(x-w/2)
-                    y = int(y-h/2)
-                    w = int(w)
-                    h = int(h)
-                    cv2.rectangle(frame, (x,y),(x+w,y+h), color=color, thickness=2)
-                    putText(frame, (x,y), categories[pred])
+
+                    if iou > IOU_THRESH and conf > CONF_THRESH:
+                        rects.append([x-w/2,y-h/2,x+w/2,y+h/2])
+                        preds.append(pred)
+
+            r = np.asarray(rects)
+            pick = non_max_suppression(r, 0.2)
+
+            for i in pick:
+                pred = preds[i]
+                color = colors[pred]
+                x1,y1,x2,y2 = [int(e) for e in rects[i]]
+                cv2.rectangle(label_frame, (x1,y1),(x2,y2), color=color, thickness=2)
+                putText(label_frame, ((x1+x2)/2, (y1+y2)/2), categories[pred])
 
 
             #predictions = np.squeeze(predictions)
@@ -160,7 +174,7 @@ def run_inference_on_image():
             #overlay = cv2.addWeighted(label_frame, 0.5, frame, 0.5, 0.0)
 
             cv2.imshow('frame', frame)
-            #cv2.imshow('label', label_frame)
+            cv2.imshow('label', label_frame)
             #cv2.imshow('overlay', overlay)
 
             k = cv2.waitKey(0)
